@@ -1,3 +1,12 @@
+// app.js (Orderlyy Dashboard)
+// Tabs: Overview, Products, Orders, Payments, Settings
+// - Analytics (Chart.js) + KPIs
+// - Products CRUD (uses /api/products)
+// - Orders status updates (uses /api/orders/:id/status)
+// - Payments review (list + proof preview + approve/reject via /api/payments/:id/(approve|reject))
+// - Settings: bank details save (/api/store/bank)
+// - Subscription banner + gating (worker returns subscription_* + support_link)
+
 (() => {
   const $ = (id) => document.getElementById(id);
 
@@ -19,6 +28,11 @@
     payments: $('tab-payments'),
     settings: $('tab-settings'),
   };
+
+  // Subscription banner (optional in index.html)
+  const subBanner = $('subBanner');
+  const subBannerText = $('subBannerText');
+  const subBannerBtn = $('subBannerBtn');
 
   // Overview / Analytics
   const storeInfo = $('storeInfo');
@@ -51,39 +65,32 @@
   const ordersTbody = ordersTable ? ordersTable.querySelector('tbody') : null;
 
   // Payments
-  const paymentStatusFilter = $('paymentStatusFilter');
   const refreshPaymentsBtn = $('refreshPayments');
-  const paymentsMsg = $('paymentsMsg');
+  const paymentsStatusFilter = $('paymentsStatusFilter');
   const paymentsTable = $('paymentsTable');
   const paymentsTbody = paymentsTable ? paymentsTable.querySelector('tbody') : null;
 
-  const proofModal = $('proofModal');
-  const closeProof = $('closeProof');
-  const proofMeta = $('proofMeta');
-  const proofBody = $('proofBody');
-  const approvePaymentBtn = $('approvePaymentBtn');
-  const rejectPaymentBtn = $('rejectPaymentBtn');
+  // Payment modal (optional)
+  const payModal = $('payModal');
+  const payModalClose = $('payModalClose');
+  const payModalTitle = $('payModalTitle');
+  const payModalBody = $('payModalBody');
 
   // Settings (Bank)
-  const storeCard = $('storeCard');
   const bankForm = $('bankForm');
-  const bankName = $('bankName');
-  const accountNumber = $('accountNumber');
-  const accountName = $('accountName');
   const bankMsg = $('bankMsg');
-  const bankClear = $('bankClear');
+  const bankNameInput = $('bankName');
+  const accountNumberInput = $('accountNumber');
+  const accountNameInput = $('accountName');
 
   // Token storage
-  const TOKEN_KEY = 'cysb_token';
+  const TOKEN_KEY = 'orderlyy_token';
 
   // Cached data
   let cachedStore = null;
   let cachedProducts = [];
   let cachedOrders = [];
   let cachedPayments = [];
-
-  // Modal state
-  let selectedPaymentId = null;
 
   // ---------- Token helpers ----------
   function getTokenFromUrl() {
@@ -123,42 +130,29 @@
     const data = await res.json().catch(() => ({}));
     if (!res.ok || data.ok === false) {
       const msg = data.error || `HTTP ${res.status}`;
-      throw new Error(msg);
+      const err = new Error(msg);
+      err.status = res.status;
+      err.payload = data;
+      throw err;
     }
     return data;
   }
 
-  // ---------- Formatting ----------
   function formatMoney(currency, value) {
     if (value === null || value === undefined) return '—';
-    if (!currency) return String(value);
-    return `${currency}${value}`;
-  }
-
-  function formatDate(isoOrSqlite) {
-    try {
-      const d = new Date(isoOrSqlite);
-      if (Number.isNaN(d.getTime())) return String(isoOrSqlite || '');
-      return d.toLocaleString();
-    } catch {
-      return String(isoOrSqlite || '');
-    }
+    const num = Number(value);
+    if (!Number.isFinite(num)) return String(value);
+    const cur = currency || '';
+    return `${cur}${num}`;
   }
 
   // ---------- Tabs ----------
   function setActiveTab(tabName) {
-    hideModal();
     tabButtons.forEach((b) => b.classList.toggle('active', b.dataset.tab === tabName));
     Object.entries(tabPanels).forEach(([name, el]) => {
       if (!el) return;
       el.hidden = name !== tabName;
     });
-
-    // Lazy loads (so opening dashboard is fast)
-    if (tabName === 'payments') loadPaymentsSafe();
-    if (tabName === 'orders') loadOrders().catch(() => {});
-    if (tabName === 'products') loadProducts().catch(() => {});
-    if (tabName === 'settings') loadStore().catch(() => {});
   }
 
   // ---------- UI show/hide ----------
@@ -181,93 +175,103 @@
   }
   function escapeAttr(s) { return escapeHtml(s); }
 
+  // ---------- Subscription / gating ----------
+  function isSubActive(store) {
+    // worker returns subscription_active boolean
+    return !!store?.subscription_active;
+  }
+
+  function setWriteLockUI(locked, store) {
+    // Disable forms/buttons (products add/edit, bank save, payment approve/reject, order status changes)
+    const lockables = [
+      productForm,
+      refreshProductsBtn,
+      refreshOrdersBtn,
+      refreshPaymentsBtn,
+      bankForm,
+    ];
+
+    lockables.forEach((el) => {
+      if (!el) return;
+      // For form, disable its inputs
+      if (el.tagName === 'FORM') {
+        el.querySelectorAll('input, textarea, select, button').forEach((x) => (x.disabled = !!locked));
+      } else if ('disabled' in el) {
+        el.disabled = !!locked;
+      }
+    });
+
+    // Table action buttons will be re-rendered; we also guard in handlers.
+    renderSubscriptionBanner(store);
+  }
+
+  function renderSubscriptionBanner(store) {
+    if (!subBanner || !subBannerText) return;
+
+    const active = isSubActive(store);
+    const exp = store?.subscription_expires_at ? `Expiry: ${store.subscription_expires_at}` : '';
+    const support = store?.support_link || (store?.support_username ? `https://t.me/${String(store.support_username).replace(/^@/, '')}` : '');
+
+    if (active) {
+      subBanner.hidden = true;
+      return;
+    }
+
+    subBanner.hidden = false;
+    subBannerText.innerHTML = `
+      <b>🔒 Subscription inactive/expired</b><br/>
+      ${exp ? `<span class="muted">${escapeHtml(exp)}</span><br/>` : ''}
+      <span class="muted">Contact support to activate.</span>
+    `;
+
+    if (subBannerBtn) {
+      subBannerBtn.onclick = () => {
+        if (support) window.open(support, '_blank');
+      };
+    }
+  }
+
+  function guardWrite(store) {
+    if (!store) return true;
+    if (isSubActive(store)) return true;
+    const support = store?.support_link || '';
+    alert('Subscription inactive/expired. Please contact support to activate.');
+    if (support) window.open(support, '_blank');
+    return false;
+  }
+
   // ---------- Store ----------
-  function renderStoreOverview(store) {
-    if (!storeInfo) return;
-
-    const bankOk = !!(store.bank_name && store.account_number && store.account_name);
-
-    storeInfo.innerHTML = `
-      <div><b>Name:</b> ${escapeHtml(store.name)}</div>
-      <div><b>Currency:</b> ${escapeHtml(store.currency)}</div>
-      <div><b>Channel:</b> ${
-        store.channel_username
-          ? '@' + escapeHtml(store.channel_username)
-          : (store.channel_id ? escapeHtml(store.channel_id) : '<span class="muted">Not linked</span>')
-      }</div>
-      <div><b>Delivery note:</b> ${escapeHtml(store.delivery_note || '')}</div>
-      <div><b>Bank details:</b> ${bankOk ? '✅ Set' : '<span class="muted">Not set</span>'}</div>
-    `;
-  }
-
-  function renderStoreSettingsCard(store) {
-    if (!storeCard) return;
-
-    const chan = store.channel_username
-      ? '@' + escapeHtml(store.channel_username)
-      : (store.channel_id ? escapeHtml(store.channel_id) : 'Not linked');
-
-    storeCard.innerHTML = `
-      <div class="storeRow"><b>Store</b><span>${escapeHtml(store.name)}</span></div>
-      <div class="storeRow"><b>Currency</b><span>${escapeHtml(store.currency)}</span></div>
-      <div class="storeRow"><b>Channel</b><span>${chan}</span></div>
-      <div class="storeRow"><b>Delivery</b><span>${escapeHtml(store.delivery_note || '')}</span></div>
-    `;
-  }
-
-  function populateBankForm(store) {
-    if (!bankName || !accountNumber || !accountName) return;
-    bankName.value = store.bank_name || '';
-    accountNumber.value = store.account_number || '';
-    accountName.value = store.account_name || '';
-    if (bankMsg) bankMsg.textContent = '';
-  }
-
   async function loadStore() {
-    const store = (await api('/api/store')).store;
+    const out = await api('/api/store');
+    const store = out.store;
     cachedStore = store;
 
-    renderStoreOverview(store);
-    renderStoreSettingsCard(store);
-    populateBankForm(store);
+    // Render store info block
+    if (storeInfo) {
+      storeInfo.innerHTML = `
+        <div><b>Name:</b> ${escapeHtml(store.name)}</div>
+        <div><b>Currency:</b> ${escapeHtml(store.currency)}</div>
+        <div><b>Channel:</b> ${
+          store.channel_username
+            ? '@' + escapeHtml(store.channel_username)
+            : (store.channel_id ? escapeHtml(store.channel_id) : '<span class="muted">Not linked</span>')
+        }</div>
+        <div><b>Delivery note:</b> ${escapeHtml(store.delivery_note || '')}</div>
+        <hr />
+        <div><b>Subscription:</b> ${store.subscription_active ? '<span class="badge good">Active</span>' : '<span class="badge bad">Inactive</span>'}</div>
+        <div class="small muted">${store.subscription_expires_at ? `Expiry: ${escapeHtml(store.subscription_expires_at)}` : ''}</div>
+      `;
+    }
+
+    // Fill bank form defaults (Settings tab)
+    if (bankNameInput) bankNameInput.value = store.bank_name || '';
+    if (accountNumberInput) accountNumberInput.value = store.account_number || '';
+    if (accountNameInput) accountNameInput.value = store.account_name || '';
+
+    // Apply lock UI
+    setWriteLockUI(!isSubActive(store), store);
 
     return store;
-  }
-
-  // ---------- Settings (Bank save) ----------
-  function setBankMsg(text, ok = true) {
-    if (!bankMsg) return;
-    bankMsg.textContent = text;
-    bankMsg.style.color = ok ? 'var(--good)' : 'var(--danger)';
-  }
-
-  function validAccountNumber(s) {
-    const t = String(s || '').trim();
-    return /^[0-9]{10}$/.test(t);
-  }
-
-  async function saveBankDetails() {
-    if (!cachedStore) await loadStore();
-
-    const payload = {
-      bank_name: String(bankName?.value || '').trim(),
-      account_number: String(accountNumber?.value || '').trim(),
-      account_name: String(accountName?.value || '').trim(),
-    };
-
-    if (!payload.bank_name || !payload.account_number || !payload.account_name) {
-      setBankMsg('Please fill all bank fields.', false);
-      return;
-    }
-    if (!validAccountNumber(payload.account_number)) {
-      setBankMsg('Account number must be 10 digits.', false);
-      return;
-    }
-
-    setBankMsg('Saving...', true);
-    await api('/api/store/bank', { method: 'PUT', body: payload });
-    await loadStore();
-    setBankMsg('Saved ✅', true);
   }
 
   // ---------- Products ----------
@@ -286,7 +290,7 @@
       tr.innerHTML = `
         <td>${escapeHtml(p.name)}</td>
         <td>${escapeHtml(formatMoney(cachedStore.currency, p.price))}</td>
-        <td>${p.in_stock ? '<span class="badge">In stock</span>' : '<span class="badge">Out</span>'}</td>
+        <td>${p.in_stock ? '<span class="badge good">In stock</span>' : '<span class="badge bad">Out</span>'}</td>
         <td class="muted">${p.photo_file_id ? '<code>' + escapeHtml(p.photo_file_id) + '</code>' : ''}</td>
         <td>
           <button class="btn secondary smallBtn" data-act="toggle" data-id="${escapeAttr(p.id)}">Toggle</button>
@@ -298,6 +302,7 @@
 
     productsTbody.querySelectorAll('button').forEach((btn) => {
       btn.addEventListener('click', async () => {
+        if (!guardWrite(cachedStore)) return;
         const act = btn.getAttribute('data-act');
         const id = btn.getAttribute('data-id');
 
@@ -323,7 +328,6 @@
   async function toggleStock(id) {
     const product = cachedProducts.find((p) => p.id === id);
     if (!product) throw new Error('Product not found');
-
     const newStock = product.in_stock ? 0 : 1;
 
     await api(`/api/products/${encodeURIComponent(id)}`, {
@@ -368,6 +372,7 @@
 
   async function addProductFromForm() {
     if (!productForm || !productFormMsg) return;
+    if (!guardWrite(cachedStore)) return;
 
     productFormMsg.textContent = '';
 
@@ -391,8 +396,8 @@
     productForm.reset();
     const stockSel = productForm.querySelector('select[name="in_stock"]');
     if (stockSel) stockSel.value = '1';
-
     productFormMsg.textContent = 'Product added ✅';
+
     await loadProducts();
     await loadAnalyticsSafe();
   }
@@ -404,38 +409,201 @@
     return cachedOrders;
   }
 
-  function statusBadge(status) {
-    const s = String(status || '').toLowerCase();
-    if (s.includes('awaiting')) return `<span class="badge">Awaiting</span>`;
-    if (s === 'paid') return `<span class="badge">Paid</span>`;
-    if (s === 'packed') return `<span class="badge">Packed</span>`;
-    if (s.includes('out')) return `<span class="badge">Out</span>`;
-    if (s === 'delivered') return `<span class="badge">Delivered</span>`;
-    if (s === 'pending') return `<span class="badge">Pending</span>`;
-    return `<span class="badge">${escapeHtml(status)}</span>`;
-  }
-
   function renderOrders() {
     if (!ordersTbody) return;
     ordersTbody.innerHTML = '';
 
     for (const o of cachedOrders) {
-      const delivery = o.delivery_text ? escapeHtml(o.delivery_text) : '<span class="muted">—</span>';
-
       const tr = document.createElement('tr');
       tr.innerHTML = `
         <td><code>${escapeHtml(o.id)}</code></td>
         <td>${escapeHtml(o.product_name || '')}</td>
         <td>${o.buyer_username ? '@' + escapeHtml(o.buyer_username) : '<span class="muted">(unknown)</span>'}</td>
         <td>${escapeHtml(String(o.qty))}</td>
-        <td>${statusBadge(o.status)}</td>
-        <td class="muted" style="max-width:320px; white-space:pre-wrap;">${delivery}</td>
+        <td>${escapeHtml(o.status || '')}</td>
+        <td class="muted small">${o.delivery_text ? escapeHtml(o.delivery_text) : ''}</td>
+        <td>
+          <button class="btn secondary smallBtn" data-act="done" data-id="${escapeAttr(o.id)}">Done</button>
+          <button class="btn secondary smallBtn" data-act="pending" data-id="${escapeAttr(o.id)}">Pending</button>
+        </td>
       `;
       ordersTbody.appendChild(tr);
     }
 
-    const pendingCount = cachedOrders.filter((o) => String(o.status) === 'pending').length;
+    ordersTbody.querySelectorAll('button').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!guardWrite(cachedStore)) return;
+        const act = btn.getAttribute('data-act');
+        const id = btn.getAttribute('data-id');
+        try {
+          const status = act === 'done' ? 'done' : 'pending';
+          await api(`/api/orders/${encodeURIComponent(id)}/status`, { method: 'PUT', body: { status } });
+          await loadOrders();
+          await loadAnalyticsSafe();
+        } catch (e) {
+          alert(e.message);
+        }
+      });
+    });
+
+    const pendingCount = cachedOrders.filter((o) => o.status === 'pending').length;
     setKpiValue(kpiPending, pendingCount);
+  }
+
+  // ---------- Payments ----------
+  async function loadPayments() {
+    const status = paymentsStatusFilter ? paymentsStatusFilter.value : '';
+    const qs = status ? `?status=${encodeURIComponent(status)}` : '';
+    cachedPayments = (await api(`/api/payments${qs}`)).payments || [];
+    renderPayments();
+    return cachedPayments;
+  }
+
+  function paymentStatusBadge(s) {
+    const v = String(s || '').toLowerCase();
+    if (v === 'confirmed') return `<span class="badge good">Confirmed</span>`;
+    if (v === 'awaiting') return `<span class="badge warn">Awaiting</span>`;
+    if (v === 'rejected') return `<span class="badge bad">Rejected</span>`;
+    return `<span class="badge">${escapeHtml(v || '—')}</span>`;
+  }
+
+  function openPaymentModal(paymentId) {
+    if (!payModal || !payModalBody || !payModalTitle) {
+      // fallback: open proof in new tab
+      window.open(`/api/payments/${encodeURIComponent(paymentId)}/proof`, '_blank');
+      return;
+    }
+
+    const p = cachedPayments.find(x => x.id === paymentId);
+    payModalTitle.textContent = `Payment ${paymentId.slice(0, 8)}…`;
+    const proofUrl = `/api/payments/${encodeURIComponent(paymentId)}/proof`;
+
+    payModalBody.innerHTML = `
+      <div class="payModalGrid">
+        <div>
+          <div class="muted small">Product</div>
+          <div><b>${escapeHtml(p?.product_name || '')}</b></div>
+          <div class="muted small" style="margin-top:8px;">Amount</div>
+          <div><b>${escapeHtml(formatMoney(p?.currency || '', p?.amount || 0))}</b></div>
+          <div class="muted small" style="margin-top:8px;">Buyer</div>
+          <div>${p?.buyer_username ? '@' + escapeHtml(p.buyer_username) : '<span class="muted">(unknown)</span>'}</div>
+          <div class="muted small" style="margin-top:8px;">Order</div>
+          <div><code>${escapeHtml(p?.order_id || '')}</code></div>
+          <div class="muted small" style="margin-top:8px;">Status</div>
+          <div>${paymentStatusBadge(p?.status)}</div>
+          <div class="muted small" style="margin-top:8px;">Delivery details</div>
+          <div class="small">${p?.delivery_text ? escapeHtml(p.delivery_text) : '<span class="muted">—</span>'}</div>
+
+          <div class="row" style="margin-top:14px; gap:8px;">
+            <button class="btn" id="pmApprove">Approve</button>
+            <button class="btn secondary" id="pmReject">Reject</button>
+            <button class="btn secondary" id="pmOpenProof">Open proof</button>
+          </div>
+        </div>
+
+        <div class="proofPane">
+          <div class="muted small">Proof preview</div>
+          <img class="proofImg" src="${proofUrl}" alt="Proof" />
+        </div>
+      </div>
+    `;
+
+    payModal.hidden = false;
+
+    const approveBtn = $('pmApprove');
+    const rejectBtn = $('pmReject');
+    const openBtn = $('pmOpenProof');
+
+    if (approveBtn) approveBtn.onclick = () => approvePayment(paymentId).catch(e => alert(e.message));
+    if (rejectBtn) rejectBtn.onclick = () => rejectPayment(paymentId).catch(e => alert(e.message));
+    if (openBtn) openBtn.onclick = () => window.open(proofUrl, '_blank');
+  }
+
+  async function approvePayment(paymentId) {
+    if (!guardWrite(cachedStore)) return;
+    await api(`/api/payments/${encodeURIComponent(paymentId)}/approve`, { method: 'PUT' });
+    await loadPayments();
+    await loadOrders();
+    alert('Approved ✅ Buyer will be asked for delivery details.');
+    closePaymentModal();
+  }
+
+  async function rejectPayment(paymentId) {
+    if (!guardWrite(cachedStore)) return;
+    await api(`/api/payments/${encodeURIComponent(paymentId)}/reject`, { method: 'PUT' });
+    await loadPayments();
+    await loadOrders();
+    alert('Rejected ❌ Buyer will be notified.');
+    closePaymentModal();
+  }
+
+  function closePaymentModal() {
+    if (!payModal) return;
+    payModal.hidden = true;
+    if (payModalBody) payModalBody.innerHTML = '';
+  }
+
+  function renderPayments() {
+    if (!paymentsTbody) return;
+    paymentsTbody.innerHTML = '';
+
+    for (const p of cachedPayments) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td><code>${escapeHtml(p.id)}</code></td>
+        <td><code>${escapeHtml(p.order_id || '')}</code></td>
+        <td>${escapeHtml(p.product_name || '')}</td>
+        <td>${p.buyer_username ? '@' + escapeHtml(p.buyer_username) : '<span class="muted">(unknown)</span>'}</td>
+        <td><b>${escapeHtml(formatMoney(p.currency || (cachedStore?.currency || ''), p.amount || 0))}</b></td>
+        <td>${paymentStatusBadge(p.status)}</td>
+        <td class="row" style="gap:8px;">
+          <button class="btn secondary smallBtn" data-act="view" data-id="${escapeAttr(p.id)}">View</button>
+          <button class="btn smallBtn" data-act="approve" data-id="${escapeAttr(p.id)}">Approve</button>
+          <button class="btn secondary smallBtn" data-act="reject" data-id="${escapeAttr(p.id)}">Reject</button>
+        </td>
+      `;
+      paymentsTbody.appendChild(tr);
+    }
+
+    paymentsTbody.querySelectorAll('button').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const act = btn.getAttribute('data-act');
+        const id = btn.getAttribute('data-id');
+
+        try {
+          if (act === 'view') {
+            openPaymentModal(id);
+            return;
+          }
+          if (!guardWrite(cachedStore)) return;
+          if (act === 'approve') await approvePayment(id);
+          if (act === 'reject') await rejectPayment(id);
+        } catch (e) {
+          alert(e.message);
+        }
+      });
+    });
+  }
+
+  // ---------- Settings (bank) ----------
+  async function saveBankDetails() {
+    if (!bankForm || !bankMsg) return;
+    if (!guardWrite(cachedStore)) return;
+
+    bankMsg.textContent = '';
+
+    const bank_name = (bankNameInput?.value || '').trim();
+    const account_number = (accountNumberInput?.value || '').trim();
+    const account_name = (accountNameInput?.value || '').trim();
+
+    if (!bank_name || !account_number || !account_name) {
+      bankMsg.textContent = 'All fields are required.';
+      return;
+    }
+
+    await api('/api/store/bank', { method: 'PUT', body: { bank_name, account_number, account_name } });
+    bankMsg.textContent = 'Saved ✅';
+    await loadStore();
   }
 
   // ---------- Analytics ----------
@@ -485,28 +653,15 @@
     const options = {
       responsive: true,
       maintainAspectRatio: false,
-      plugins: {
-        legend: { display: false },
-        tooltip: { enabled: true },
-      },
+      plugins: { legend: { display: false } },
       scales: {
-        x: {
-          ticks: { color: '#a7b0c0' },
-          grid: { color: 'rgba(31,42,64,0.35)' },
-        },
-        y: {
-          ticks: { color: '#a7b0c0', precision: 0 },
-          grid: { color: 'rgba(31,42,64,0.35)' },
-        },
+        x: { ticks: { color: '#a7b0c0' }, grid: { color: 'rgba(31,42,64,0.35)' } },
+        y: { ticks: { color: '#a7b0c0', precision: 0 }, grid: { color: 'rgba(31,42,64,0.35)' } },
       },
     };
 
     if (!ordersChart) {
-      ordersChart = new Chart(ordersChartCanvas.getContext('2d'), {
-        type: 'line',
-        data,
-        options,
-      });
+      ordersChart = new Chart(ordersChartCanvas.getContext('2d'), { type: 'line', data, options });
     } else {
       ordersChart.data = data;
       ordersChart.update();
@@ -528,7 +683,7 @@
       setKpiValue(kpiRevenue, a.revenue_total ?? 0);
       setDelta(kpiRevenueDelta, a.revenue_change_pct);
 
-      const pendingFallback = cachedOrders.filter((o) => String(o.status) === 'pending').length;
+      const pendingFallback = cachedOrders.filter((o) => o.status === 'pending').length;
       setKpiValue(kpiPending, a.pending_total ?? pendingFallback);
       setDelta(kpiPendingDelta, a.pending_change_pct);
 
@@ -541,8 +696,7 @@
 
       if (analyticsMsg) analyticsMsg.textContent = '';
     } catch (e) {
-      const pending = cachedOrders.filter((o) => String(o.status) === 'pending').length;
-
+      const pending = cachedOrders.filter((o) => o.status === 'pending').length;
       setKpiValue(kpiOrders, cachedOrders.length);
       setDelta(kpiOrdersDelta, null);
 
@@ -555,187 +709,14 @@
       setKpiValue(kpiProducts, cachedProducts.length);
       setDelta(kpiProductsDelta, null);
 
-      if (analyticsMsg) analyticsMsg.textContent = `Analytics error: ${e.message}`;
+      if (analyticsMsg) analyticsMsg.textContent = `Analytics not ready (${e.message})`;
     }
-  }
-
-  // ---------- Payments ----------
-  function setPaymentsMsg(text, ok = true) {
-    if (!paymentsMsg) return;
-    paymentsMsg.textContent = text || '';
-    paymentsMsg.style.color = ok ? 'var(--muted)' : 'var(--danger)';
-  }
-
-  async function loadPaymentsSafe() {
-    try {
-      await loadPayments();
-    } catch (e) {
-      setPaymentsMsg(`Payments error: ${e.message}`, false);
-    }
-  }
-
-  async function loadPayments() {
-    if (!paymentsTbody) return [];
-
-    setPaymentsMsg('Loading...', true);
-
-    const status = String(paymentStatusFilter?.value || '').trim();
-    const q = status ? `?status=${encodeURIComponent(status)}` : '';
-    const out = await api(`/api/payments${q}`);
-
-    cachedPayments = out.payments || [];
-    renderPayments();
-    setPaymentsMsg(cachedPayments.length ? '' : 'No payments found.', true);
-    return cachedPayments;
-  }
-
-  function paymentStatusPill(status) {
-    const s = String(status || '').toLowerCase();
-    if (s === 'awaiting') return `<span class="badge">Awaiting</span>`;
-    if (s === 'confirmed') return `<span class="badge">Confirmed</span>`;
-    if (s === 'rejected') return `<span class="badge">Rejected</span>`;
-    return `<span class="badge">${escapeHtml(status)}</span>`;
-  }
-
-  function renderPayments() {
-    if (!paymentsTbody || !cachedStore) return;
-    paymentsTbody.innerHTML = '';
-
-    for (const pay of cachedPayments) {
-      const tr = document.createElement('tr');
-      const buyer = pay.buyer_username ? '@' + escapeHtml(pay.buyer_username) : '<span class="muted">(unknown)</span>';
-      const amount = formatMoney(pay.currency || cachedStore.currency, pay.amount);
-
-      tr.innerHTML = `
-        <td class="muted">${escapeHtml(formatDate(pay.created_at))}</td>
-        <td>${escapeHtml(pay.product_name || '')}</td>
-        <td>${buyer}</td>
-        <td><b>${escapeHtml(amount)}</b></td>
-        <td>${paymentStatusPill(pay.status)}</td>
-        <td>
-          <button class="btn secondary smallBtn" data-act="view" data-id="${escapeAttr(pay.id)}">View</button>
-        </td>
-        <td>
-          ${
-            String(pay.status) === 'awaiting'
-              ? `
-                <button class="btn smallBtn" data-act="approve" data-id="${escapeAttr(pay.id)}">Approve</button>
-                <button class="btn danger smallBtn" data-act="reject" data-id="${escapeAttr(pay.id)}">Reject</button>
-              `
-              : `<span class="muted">—</span>`
-          }
-        </td>
-      `;
-      paymentsTbody.appendChild(tr);
-    }
-
-    paymentsTbody.querySelectorAll('button').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        const act = btn.getAttribute('data-act');
-        const id = btn.getAttribute('data-id');
-        try {
-          if (act === 'view') {
-            await openProofModal(id);
-          } else if (act === 'approve') {
-            if (!confirm('Approve this payment?')) return;
-            await api(`/api/payments/${encodeURIComponent(id)}/approve`, { method: 'PUT' });
-            await loadPayments();
-            await loadOrders().catch(() => {});
-          } else if (act === 'reject') {
-            if (!confirm('Reject this payment?')) return;
-            await api(`/api/payments/${encodeURIComponent(id)}/reject`, { method: 'PUT' });
-            await loadPayments();
-            await loadOrders().catch(() => {});
-          }
-        } catch (e) {
-          alert(e.message);
-        }
-      });
-    });
-  }
-
-  function showModal() {
-    if (!proofModal) return;
-    proofModal.hidden = false;
-    document.body.style.overflow = 'hidden';
-  }
-
-  function hideModal() {
-    if (!proofModal) return;
-    proofModal.hidden = true;
-    document.body.style.overflow = '';
-    selectedPaymentId = null;
-  }
-
-  async function openProofModal(paymentId) {
-    selectedPaymentId = paymentId;
-    if (proofMeta) proofMeta.textContent = '';
-    if (proofBody) proofBody.innerHTML = `<div class="muted">Loading proof...</div>`;
-    showModal();
-
-    // Load meta
-    const out = await api(`/api/payments/${encodeURIComponent(paymentId)}`);
-    const pay = out.payment;
-    const product = out.product;
-    const order = out.order;
-
-    if (proofMeta) {
-      const buyer = pay.buyer_username ? '@' + pay.buyer_username : pay.buyer_id;
-      proofMeta.innerHTML = `
-        <div>Order: <code>${escapeHtml(pay.order_id)}</code></div>
-        <div>Buyer: ${escapeHtml(String(buyer))}</div>
-        <div>Product: ${escapeHtml(product?.name || '')}</div>
-        <div>Status: <b>${escapeHtml(pay.status)}</b></div>
-      `;
-    }
-
-    // Proof preview
-    // IMPORTANT: <img> cannot send Authorization header,
-    // so we pass token as query param (worker supports ?token=).
-    const token = getToken();
-    const proofUrl = `/api/payments/${encodeURIComponent(paymentId)}/proof?token=${encodeURIComponent(token)}`;
-
-    if (proofBody) {
-      if (String(pay.proof_type) === 'photo') {
-        proofBody.innerHTML = `
-          <img class="proofImg" src="${escapeAttr(proofUrl)}" alt="Payment proof" />
-          <div class="muted small" style="margin-top:8px;">If image doesn’t load, refresh and try again.</div>
-        `;
-      } else {
-        proofBody.innerHTML = `
-          <div class="muted">This proof was uploaded as a document.</div>
-          <div style="margin-top:10px;"><code>${escapeHtml(pay.proof_file_id || '')}</code></div>
-          <div class="muted small" style="margin-top:8px;">(Documents are harder to preview. Use Telegram or ask buyer to send as photo next time.)</div>
-        `;
-      }
-    }
-
-    // Buttons state
-    const awaiting = String(pay.status) === 'awaiting';
-    if (approvePaymentBtn) approvePaymentBtn.disabled = !awaiting;
-    if (rejectPaymentBtn) rejectPaymentBtn.disabled = !awaiting;
-  }
-
-  async function approveSelectedPayment() {
-    if (!selectedPaymentId) return;
-    await api(`/api/payments/${encodeURIComponent(selectedPaymentId)}/approve`, { method: 'PUT' });
-    await loadPayments();
-    await loadOrders().catch(() => {});
-    hideModal();
-  }
-
-  async function rejectSelectedPayment() {
-    if (!selectedPaymentId) return;
-    await api(`/api/payments/${encodeURIComponent(selectedPaymentId)}/reject`, { method: 'PUT' });
-    await loadPayments();
-    await loadOrders().catch(() => {});
-    hideModal();
   }
 
   // ---------- Load all ----------
   async function loadAll() {
     await loadStore();
-    await Promise.all([loadProducts(), loadOrders()]);
+    await Promise.all([loadProducts(), loadOrders(), loadPayments()]);
     await loadAnalyticsSafe();
   }
 
@@ -779,9 +760,7 @@
     }
 
     // Products
-    if (refreshProductsBtn) {
-      refreshProductsBtn.addEventListener('click', () => loadProducts().catch((e) => alert(e.message)));
-    }
+    if (refreshProductsBtn) refreshProductsBtn.addEventListener('click', () => loadProducts().catch((e) => alert(e.message)));
     if (productForm) {
       productForm.addEventListener('submit', (ev) => {
         ev.preventDefault();
@@ -801,68 +780,30 @@
     }
 
     // Orders
-    if (refreshOrdersBtn) {
-      refreshOrdersBtn.addEventListener('click', () => loadOrders().catch((e) => alert(e.message)));
-    }
+    if (refreshOrdersBtn) refreshOrdersBtn.addEventListener('click', () => loadOrders().catch((e) => alert(e.message)));
 
-    // Period dropdown
-    if (periodSelect) {
-      periodSelect.addEventListener('change', () => loadAnalyticsSafe().catch(() => {}));
-    }
+    // Payments
+    if (refreshPaymentsBtn) refreshPaymentsBtn.addEventListener('click', () => loadPayments().catch((e) => alert(e.message)));
+    if (paymentsStatusFilter) paymentsStatusFilter.addEventListener('change', () => loadPayments().catch((e) => alert(e.message)));
+    if (payModalClose) payModalClose.addEventListener('click', closePaymentModal);
+    if (payModal) payModal.addEventListener('click', (e) => {
+      // click outside modal box closes
+      if (e.target === payModal) closePaymentModal();
+    });
 
-    // Settings: save bank details
+    // Settings (bank)
     if (bankForm) {
       bankForm.addEventListener('submit', (ev) => {
         ev.preventDefault();
-        saveBankDetails().catch((e) => setBankMsg(e.message || 'Failed', false));
-      });
-    }
-    if (bankClear) {
-      bankClear.addEventListener('click', () => {
-        if (bankName) bankName.value = '';
-        if (accountNumber) accountNumber.value = '';
-        if (accountName) accountName.value = '';
-        if (bankMsg) bankMsg.textContent = '';
+        saveBankDetails().catch((e) => {
+          if (bankMsg) bankMsg.textContent = 'Error: ' + e.message;
+          alert(e.message);
+        });
       });
     }
 
-    // Payments
-    if (refreshPaymentsBtn) {
-      refreshPaymentsBtn.addEventListener('click', () => loadPaymentsSafe());
-    }
-    if (paymentStatusFilter) {
-      paymentStatusFilter.addEventListener('change', () => loadPaymentsSafe());
-    }
-
-    // Modal close
-    if (closeProof) closeProof.addEventListener('click', hideModal);
-    if (proofModal) {
-      proofModal.addEventListener('click', (e) => {
-        const t = e.target;
-        if (t && t.dataset && t.dataset.close === '1') hideModal();
-      });
-    }
-
-    // Modal approve/reject
-    if (approvePaymentBtn) {
-      approvePaymentBtn.addEventListener('click', async () => {
-        if (!selectedPaymentId) return;
-        if (!confirm('Approve this payment?')) return;
-        try { await approveSelectedPayment(); } catch (e) { alert(e.message); }
-      });
-    }
-    if (rejectPaymentBtn) {
-      rejectPaymentBtn.addEventListener('click', async () => {
-        if (!selectedPaymentId) return;
-        if (!confirm('Reject this payment?')) return;
-        try { await rejectSelectedPayment(); } catch (e) { alert(e.message); }
-      });
-    }
-
-    // ESC closes modal
-    window.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && proofModal && !proofModal.hidden) hideModal();
-    });
+    // Period dropdown
+    if (periodSelect) periodSelect.addEventListener('change', () => loadAnalyticsSafe().catch(() => {}));
   }
 
   // ---------- Boot ----------
@@ -886,28 +827,10 @@
   }
 
   window.addEventListener('DOMContentLoaded', () => {
-    // small button style
+    // Small button helper (keeps CSS minimal)
     const style = document.createElement('style');
     style.textContent = `
       .smallBtn { padding: 8px 10px; font-size: 12px; border-radius: 10px; }
-      .modal { position: fixed; inset: 0; z-index: 999; display: grid; place-items: center; }
-      .modalBackdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.55); }
-      .modalCard {
-        position: relative;
-        width: min(900px, calc(100vw - 24px));
-        max-height: calc(100vh - 24px);
-        overflow: hidden;
-        border-radius: 16px;
-        border: 1px solid var(--border);
-        background: var(--card);
-        box-shadow: var(--shadow);
-        display: grid;
-        grid-template-rows: auto 1fr auto;
-      }
-      .modalHeader { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:14px 14px; border-bottom:1px solid var(--border); }
-      .modalFooter { display:flex; justify-content:flex-end; gap:10px; padding:14px; border-top:1px solid var(--border); }
-      .proofBody { padding: 14px; overflow:auto; }
-      .proofImg { width: 100%; height: auto; border-radius: 12px; border: 1px solid var(--border); background:#0f1422; }
     `;
     document.head.appendChild(style);
 

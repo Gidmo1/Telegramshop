@@ -1,3 +1,29 @@
+/**
+ * Orderlyy Worker (Cloudflare Workers + D1 + KV)
+ * - Telegram store bot + dashboard API
+ * - Manual transfer + proof upload + seller approval (Telegram + dashboard)
+ * - Delivery details after payment confirmation
+ * - Subscription gate (14-day free trial) + support activation via @orderlyysupport (manual)
+ *
+ * ✅ Requires (env):
+ *   TELEGRAM_BOT_TOKEN, APP_BASE_URL
+ *   BOT_USERNAME (recommended for deep links)
+ *   SUPPORT_USERNAME (optional; defaults to "orderlyysupport")
+ *
+ * ✅ Requires bindings:
+ *   DB (D1), STATE (KV)
+ *
+ * ✅ D1 schema expectations:
+ *   stores: add these columns if missing:
+ *     - bank_name TEXT, account_number TEXT, account_name TEXT
+ *     - subscription_status TEXT
+ *     - subscription_expires_at TEXT
+ *   orders: must include:
+ *     - delivery_text TEXT
+ *     - buyer_phone TEXT (optional)
+ *   payments table: exists from previous step
+ */
+
 const JSON_HEADERS = { 'content-type': 'application/json; charset=utf-8' };
 
 function json(data, init = {}) {
@@ -36,6 +62,12 @@ function requireEnv(env, key) {
 
 function requireBinding(env, key) {
   if (!env[key]) throw new Error(`Missing required binding: ${key}`);
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
 }
 
 async function tgCall(env, method, payload) {
@@ -77,30 +109,127 @@ function kb(buttonRows) {
   return { reply_markup: { inline_keyboard: buttonRows } };
 }
 
+/* -----------------------------
+   Support / Subscription settings
+------------------------------ */
+const FREE_TRIAL_DAYS = 14;
+
+function supportUsername(env) {
+  const u = String(env.SUPPORT_USERNAME || 'orderlyysupport').trim().replace(/^@/, '');
+  return u || 'orderlyysupport';
+}
+function supportLink(env) {
+  return `https://t.me/${supportUsername(env)}`;
+}
+
+function parseDateMs(s) {
+  const t = Date.parse(String(s || ''));
+  return Number.isFinite(t) ? t : NaN;
+}
+
+function nowMs() {
+  return Date.now();
+}
+
+function isStoreActive(store) {
+  // Fail-open for old DB (avoid breaking existing installs)
+  if (!store) return true;
+  if (!('subscription_status' in store) || !('subscription_expires_at' in store)) return true;
+
+  const status = String(store.subscription_status || '').toLowerCase();
+  const expMs = parseDateMs(store.subscription_expires_at);
+
+  if (!Number.isFinite(expMs)) {
+    if (status === 'expired' || status === 'inactive') return false;
+    return true;
+  }
+
+  return expMs > nowMs();
+}
+
+function subscriptionBadge(store) {
+  const status = String(store?.subscription_status || '').toLowerCase() || 'unknown';
+  const expires_at = store?.subscription_expires_at || '';
+  const active = isStoreActive(store);
+  return { status, expires_at, active };
+}
+
+async function ensureStoreSubscriptionDefaults(env, storeId) {
+  // Set defaults only if columns exist; ignore errors.
+  try {
+    await env.DB.prepare(`
+      UPDATE stores
+      SET subscription_status = COALESCE(subscription_status, 'trial')
+      WHERE id = ?
+    `).bind(storeId).run();
+
+    await env.DB.prepare(`
+      UPDATE stores
+      SET subscription_expires_at = COALESCE(
+        subscription_expires_at,
+        datetime(COALESCE(created_at, datetime('now')), ?)
+      )
+      WHERE id = ?
+    `).bind(`+${FREE_TRIAL_DAYS} days`, storeId).run();
+  } catch {
+    // ignore
+  }
+}
+
+async function requireActiveStoreOrExplain(env, chatId, store) {
+  if (isStoreActive(store)) return true;
+
+  const badge = subscriptionBadge(store);
+  const exp = badge.expires_at ? `\nExpiry: <code>${escapeHtml(badge.expires_at)}</code>` : '';
+  await tgSendMessage(
+    env,
+    chatId,
+    `🔒 Subscription inactive/expired.${exp}\n\nTo activate, message support: @${escapeHtml(supportUsername(env))}`,
+    kb([[{ text: 'Contact support', url: supportLink(env) }]])
+  );
+  return false;
+}
+
+/* -----------------------------
+   Bot menus
+------------------------------ */
 function mainMenu() {
   return kb([
     [{ text: 'Create store', callback_data: 'menu:create' }],
     [{ text: 'Link channel', callback_data: 'menu:link' }, { text: 'Add product', callback_data: 'menu:add' }],
     [{ text: 'Dashboard link', callback_data: 'menu:dashboard' }],
+    [{ text: 'Subscription / Activate', callback_data: 'menu:sub' }],
   ]);
 }
 
+function updateDeliveryMenu(orderId) {
+  return kb([[{ text: 'Update delivery details', callback_data: `addr:update:${orderId}` }]]);
+}
+
+function sellerDeliveryStatusMenu(orderId) {
+  return kb([
+    [{ text: '📦 Packed', callback_data: `ship:packed:${orderId}` }, { text: '🚚 Out', callback_data: `ship:out:${orderId}` }],
+    [{ text: '✅ Delivered', callback_data: `ship:delivered:${orderId}` }],
+  ]);
+}
+
+/* -----------------------------
+   KV State
+------------------------------ */
 async function getState(env, userId) {
   const raw = await env.STATE.get(`state:${userId}`);
   return raw ? JSON.parse(raw) : null;
 }
-
 async function setState(env, userId, state) {
   await env.STATE.put(`state:${userId}`, JSON.stringify(state), { expirationTtl: 1800 }); // 30 mins
 }
-
 async function clearState(env, userId) {
   await env.STATE.delete(`state:${userId}`);
 }
 
-/**
- * ✅ Cloudflare D1: NO stmt.limit()
- */
+/* -----------------------------
+   D1 helpers
+------------------------------ */
 async function dbOne(stmt) {
   if (typeof stmt.first === 'function') {
     const row = await stmt.first();
@@ -123,18 +252,14 @@ async function authStore(env, request) {
   return dbOne(env.DB.prepare('SELECT * FROM stores WHERE owner_token = ?').bind(token));
 }
 
+/* -----------------------------
+   Basic HTTP helpers
+------------------------------ */
 function notFound() {
   return new Response('Not Found', { status: 404 });
 }
-
 function methodNotAllowed() {
   return new Response('Method Not Allowed', { status: 405 });
-}
-
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, (c) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-  }[c]));
 }
 
 /* -----------------------------
@@ -285,17 +410,6 @@ function sellerPayReviewMenu(paymentId) {
   ]);
 }
 
-function updateDeliveryMenu(orderId) {
-  return kb([[{ text: 'Update delivery details', callback_data: `addr:update:${orderId}` }]]);
-}
-
-function sellerDeliveryStatusMenu(orderId) {
-  return kb([
-    [{ text: '📦 Packed', callback_data: `ship:packed:${orderId}` }, { text: '🚚 Out', callback_data: `ship:out:${orderId}` }],
-    [{ text: '✅ Delivered', callback_data: `ship:delivered:${orderId}` }],
-  ]);
-}
-
 async function sendPaymentInstructions(env, buyerChatId, store, product, qty, orderId) {
   const total = asNumber(product.price) * asNumber(qty);
   const hasBank = store.bank_name && store.account_number && store.account_name;
@@ -387,33 +501,48 @@ async function handleApi(env, request) {
   const store = await authStore(env, request);
   if (!store) return json({ ok: false, error: 'unauthorized' }, { status: 401 });
 
-  // Analytics
+  // Ensure subscription defaults exist (trial) for older stores
+  await ensureStoreSubscriptionDefaults(env, store.id);
+
+  // Re-fetch store to get new fields (safe)
+  const store2 = await dbOne(env.DB.prepare('SELECT * FROM stores WHERE id = ?').bind(store.id)) || store;
+  const active = isStoreActive(store2);
+
+  // Analytics (read-only)
   if (path === '/api/analytics') {
-    return handleAnalytics(env, store, request);
+    return handleAnalytics(env, store2, request);
   }
 
   // Store info
   if (path === '/api/store') {
     if (request.method !== 'GET') return methodNotAllowed();
+    const badge = subscriptionBadge(store2);
     return json({
       ok: true,
       store: {
-        id: store.id,
-        name: store.name,
-        currency: store.currency,
-        delivery_note: store.delivery_note,
-        channel_id: store.channel_id,
-        channel_username: store.channel_username,
-        bank_name: store.bank_name || '',
-        account_number: store.account_number || '',
-        account_name: store.account_name || '',
+        id: store2.id,
+        name: store2.name,
+        currency: store2.currency,
+        delivery_note: store2.delivery_note,
+        channel_id: store2.channel_id,
+        channel_username: store2.channel_username,
+        bank_name: store2.bank_name || '',
+        account_number: store2.account_number || '',
+        account_name: store2.account_name || '',
+
+        subscription_status: badge.status,
+        subscription_expires_at: badge.expires_at || '',
+        subscription_active: badge.active,
+        support_username: supportUsername(env),
+        support_link: supportLink(env),
       },
     });
   }
 
-  // Save bank details
+  // Save bank details (write → gated)
   if (path === '/api/store/bank') {
     if (request.method !== 'PUT') return methodNotAllowed();
+    if (!active) return json({ ok: false, error: 'subscription_required' }, { status: 402 });
 
     const body = await readJson(request);
     if (!body) return json({ ok: false, error: 'invalid_json' }, { status: 400 });
@@ -431,7 +560,7 @@ async function handleApi(env, request) {
 
     await env.DB.prepare(
       'UPDATE stores SET bank_name = ?, account_number = ?, account_name = ? WHERE id = ?'
-    ).bind(bank_name, account_number, account_name, store.id).run();
+    ).bind(bank_name, account_number, account_name, store2.id).run();
 
     return json({ ok: true });
   }
@@ -441,11 +570,13 @@ async function handleApi(env, request) {
     if (request.method === 'GET') {
       const res = await env.DB.prepare(
         'SELECT * FROM products WHERE store_id = ? ORDER BY created_at DESC'
-      ).bind(store.id).all();
+      ).bind(store2.id).all();
       return json({ ok: true, products: res.results || [] });
     }
 
     if (request.method === 'POST') {
+      if (!active) return json({ ok: false, error: 'subscription_required' }, { status: 402 });
+
       const body = await readJson(request);
       if (!body) return json({ ok: false, error: 'invalid_json' }, { status: 400 });
 
@@ -460,7 +591,7 @@ async function handleApi(env, request) {
 
       await env.DB.prepare(
         'INSERT INTO products (id, store_id, name, price, description, in_stock, photo_file_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime("now"))'
-      ).bind(id, store.id, name, price, description, in_stock, photo_file_id).run();
+      ).bind(id, store2.id, name, price, description, in_stock, photo_file_id).run();
 
       return json({ ok: true, id });
     }
@@ -472,6 +603,7 @@ async function handleApi(env, request) {
   if (prodMatch) {
     const productId = prodMatch[1];
     if (request.method !== 'PUT') return methodNotAllowed();
+    if (!active) return json({ ok: false, error: 'subscription_required' }, { status: 402 });
 
     const body = await readJson(request);
     if (!body) return json({ ok: false, error: 'invalid_json' }, { status: 400 });
@@ -484,36 +616,38 @@ async function handleApi(env, request) {
 
     await env.DB.prepare(
       'UPDATE products SET name = ?, price = ?, description = ?, in_stock = ?, photo_file_id = ? WHERE id = ? AND store_id = ?'
-    ).bind(name, price, description, in_stock, photo_file_id, productId, store.id).run();
+    ).bind(name, price, description, in_stock, photo_file_id, productId, store2.id).run();
 
     return json({ ok: true });
   }
 
-  // Orders (include delivery_text)
+  // Orders (read-only)
   if (path === '/api/orders') {
     if (request.method !== 'GET') return methodNotAllowed();
     const res = await env.DB.prepare(
       'SELECT o.*, p.name AS product_name, p.price AS product_price FROM orders o LEFT JOIN products p ON p.id = o.product_id WHERE o.store_id = ? ORDER BY o.created_at DESC'
-    ).bind(store.id).all();
+    ).bind(store2.id).all();
     return json({ ok: true, orders: res.results || [] });
   }
 
+  // Order status update (write → gated)
   const ordStatusMatch = path.match(/^\/api\/orders\/([^\/]+)\/status$/);
   if (ordStatusMatch) {
     if (request.method !== 'PUT') return methodNotAllowed();
-    const orderId = ordStatusMatch[1];
+    if (!active) return json({ ok: false, error: 'subscription_required' }, { status: 402 });
 
+    const orderId = ordStatusMatch[1];
     const body = await readJson(request);
     const status = String(body?.status || '').trim();
     if (!status) return json({ ok: false, error: 'status_required' }, { status: 400 });
 
     await env.DB.prepare('UPDATE orders SET status = ? WHERE id = ? AND store_id = ?')
-      .bind(status, orderId, store.id).run();
+      .bind(status, orderId, store2.id).run();
 
     return json({ ok: true });
   }
 
-  // Payments list (dashboard)
+  // Payments list (read-only)
   if (path === '/api/payments') {
     if (request.method !== 'GET') return methodNotAllowed();
 
@@ -534,7 +668,7 @@ async function handleApi(env, request) {
       LEFT JOIN stores s ON s.id = pay.store_id
       WHERE pay.store_id = ?
     `;
-    const binds = [store.id];
+    const binds = [store2.id];
 
     if (status) {
       sql += ` AND pay.status = ?`;
@@ -547,14 +681,14 @@ async function handleApi(env, request) {
     return json({ ok: true, payments: res.results || [] });
   }
 
-  // Single payment details
+  // Single payment details (read-only)
   const payGetMatch = path.match(/^\/api\/payments\/([^\/]+)$/);
   if (payGetMatch) {
     if (request.method !== 'GET') return methodNotAllowed();
     const paymentId = payGetMatch[1];
 
     const pay = await dbOne(env.DB.prepare('SELECT * FROM payments WHERE id = ?').bind(paymentId));
-    if (!pay || String(pay.store_id) !== String(store.id)) return json({ ok: false, error: 'not_found' }, { status: 404 });
+    if (!pay || String(pay.store_id) !== String(store2.id)) return json({ ok: false, error: 'not_found' }, { status: 404 });
 
     const order = await dbOne(env.DB.prepare('SELECT * FROM orders WHERE id = ?').bind(pay.order_id));
     const product = order ? await dbOne(env.DB.prepare('SELECT * FROM products WHERE id = ?').bind(order.product_id)) : null;
@@ -564,65 +698,63 @@ async function handleApi(env, request) {
       payment: pay,
       order,
       product: product ? { id: product.id, name: product.name, price: product.price } : null,
-      store: { id: store.id, currency: store.currency },
+      store: { id: store2.id, currency: store2.currency },
     });
   }
 
-  // Proof image proxy for dashboard
+  // Proof image proxy for dashboard (read-only)
   const payProofMatch = path.match(/^\/api\/payments\/([^\/]+)\/proof$/);
   if (payProofMatch) {
     if (request.method !== 'GET') return methodNotAllowed();
     const paymentId = payProofMatch[1];
 
     const pay = await dbOne(env.DB.prepare('SELECT * FROM payments WHERE id = ?').bind(paymentId));
-    if (!pay || String(pay.store_id) !== String(store.id)) return new Response('Not found', { status: 404 });
+    if (!pay || String(pay.store_id) !== String(store2.id)) return new Response('Not found', { status: 404 });
 
-    // Only photos are guaranteed to preview well
     const fileUrl = await tgGetFileUrl(env, pay.proof_file_id);
     const r = await fetch(fileUrl);
     const ct = r.headers.get('content-type') || 'application/octet-stream';
     return new Response(r.body, { status: 200, headers: { 'content-type': ct, 'cache-control': 'private, max-age=60' } });
   }
 
-  // Approve / Reject from dashboard
+  // Approve / Reject payment from dashboard (write → gated)
   const payActionMatch = path.match(/^\/api\/payments\/([^\/]+)\/(approve|reject)$/);
   if (payActionMatch) {
     if (request.method !== 'PUT') return methodNotAllowed();
+    if (!active) return json({ ok: false, error: 'subscription_required' }, { status: 402 });
+
     const paymentId = payActionMatch[1];
     const action = payActionMatch[2];
 
     const pay = await dbOne(env.DB.prepare('SELECT * FROM payments WHERE id = ?').bind(paymentId));
-    if (!pay || String(pay.store_id) !== String(store.id)) return json({ ok: false, error: 'not_found' }, { status: 404 });
+    if (!pay || String(pay.store_id) !== String(store2.id)) return json({ ok: false, error: 'not_found' }, { status: 404 });
 
     if (action === 'approve') {
       await env.DB.prepare('UPDATE payments SET status = ? WHERE id = ?').bind('confirmed', paymentId).run();
       await env.DB.prepare('UPDATE orders SET status = ? WHERE id = ? AND store_id = ?')
         .bind('paid', pay.order_id, pay.store_id).run();
 
-      // Ask buyer for delivery details
       try { await promptDeliveryDetails(env, Number(pay.buyer_id), pay.order_id); } catch {}
-
-      return json({ ok: true });
-    } else {
-      await env.DB.prepare('UPDATE payments SET status = ? WHERE id = ?').bind('rejected', paymentId).run();
-      await env.DB.prepare('UPDATE orders SET status = ? WHERE id = ? AND store_id = ?')
-        .bind('pending', pay.order_id, pay.store_id).run();
-
-      try {
-        await tgSendMessage(env, Number(pay.buyer_id),
-          `Payment rejected ❌\nOrder Ref: <code>${escapeHtml(pay.order_id)}</code>\n\nPlease tap the payment button again and resend proof.`
-        );
-      } catch {}
-
       return json({ ok: true });
     }
+
+    await env.DB.prepare('UPDATE payments SET status = ? WHERE id = ?').bind('rejected', paymentId).run();
+    await env.DB.prepare('UPDATE orders SET status = ? WHERE id = ? AND store_id = ?')
+      .bind('pending', pay.order_id, pay.store_id).run();
+
+    try {
+      await tgSendMessage(env, Number(pay.buyer_id),
+        `Payment rejected ❌\nOrder Ref: <code>${escapeHtml(pay.order_id)}</code>\n\nPlease tap the payment button again and resend proof.`
+      );
+    } catch {}
+    return json({ ok: true });
   }
 
   return notFound();
 }
 
 /* -----------------------------
-   Telegram
+   Telegram (webhook)
 ------------------------------ */
 async function handleTelegram(env, request) {
   const update = await request.json().catch(() => null);
@@ -646,6 +778,7 @@ async function handleTelegram(env, request) {
         await tgSendMessage(env, chatId, 'Session expired. Please contact the seller.');
         return json({ ok: true });
       }
+
       const txt = (message.text || '').trim();
       if (!txt) {
         await tgSendMessage(env, chatId, 'Please send your delivery details as text (Name, Phone, Address, Landmark).');
@@ -665,6 +798,7 @@ async function handleTelegram(env, request) {
       }
 
       const store = await dbOne(env.DB.prepare('SELECT * FROM stores WHERE id = ?').bind(order.store_id));
+
       await env.DB.prepare('UPDATE orders SET delivery_text = ?, status = ? WHERE id = ? AND store_id = ?')
         .bind(txt, 'delivery_details_received', orderId, order.store_id).run();
 
@@ -672,7 +806,6 @@ async function handleTelegram(env, request) {
 
       await tgSendMessage(env, chatId, 'Details received ✅ Seller will deliver/confirm shortly.', updateDeliveryMenu(orderId));
 
-      // Tell seller + delivery status buttons
       try {
         const ownerChatId = Number(store.owner_id);
         await tgSendMessage(
@@ -818,10 +951,15 @@ async function handleTelegram(env, request) {
       return json({ ok: true });
     }
 
-    // Create store flow
+    // -----------------------------
+    // Create store flow (messages)
+    // -----------------------------
     if (stateEarly?.step === 'create:name') {
       const name = textMsg;
-      if (!name) { await tgSendMessage(env, chatId, 'Send your store name.'); return json({ ok: true }); }
+      if (!name) {
+        await tgSendMessage(env, chatId, 'Send your store name.');
+        return json({ ok: true });
+      }
       await setState(env, userId, { step: 'create:currency', data: { name } });
       await tgSendMessage(env, chatId, 'Currency? (e.g. ₦, $, £)');
       return json({ ok: true });
@@ -842,9 +980,26 @@ async function handleTelegram(env, request) {
       const owner_token = randomToken(24);
       const id = crypto.randomUUID();
 
-      await env.DB.prepare(
-        'INSERT INTO stores (id, owner_id, owner_token, name, currency, delivery_note, created_at) VALUES (?, ?, ?, ?, ?, ?, datetime("now"))'
-      ).bind(id, String(userId), owner_token, name, currency, delivery_note).run();
+      // ✅ Create store with 14-day trial by default
+      await env.DB.prepare(`
+        INSERT INTO stores (
+          id, owner_id, owner_token, name, currency, delivery_note,
+          subscription_status, subscription_expires_at,
+          created_at
+        ) VALUES (
+          ?, ?, ?, ?, ?, ?,
+          'trial', datetime('now', ?),
+          datetime("now")
+        )
+      `).bind(
+        id,
+        String(userId),
+        owner_token,
+        name,
+        currency,
+        delivery_note,
+        `+${FREE_TRIAL_DAYS} days`
+      ).run();
 
       await clearState(env, userId);
       const link = dashboardLink(env, owner_token);
@@ -852,13 +1007,15 @@ async function handleTelegram(env, request) {
       await tgSendMessage(
         env,
         chatId,
-        `Store created ✅\n\n<b>${escapeHtml(name)}</b>\nDashboard: ${link}\n\nNext: tap <b>Link channel</b> and add me as admin in your channel.`,
+        `Store created ✅\n\n<b>${escapeHtml(name)}</b>\nDashboard: ${link}\n\nFree trial: <b>${FREE_TRIAL_DAYS} days</b>.\n\nNext: tap <b>Link channel</b> and add me as admin in your channel.`,
         mainMenu()
       );
       return json({ ok: true });
     }
 
-    // Link channel flow
+    // -----------------------------
+    // Link channel flow (messages)
+    // -----------------------------
     if (stateEarly?.step === 'link:channel') {
       let channelRef = textMsg;
       if (!channelRef && message.forward_from_chat) channelRef = String(message.forward_from_chat.id);
@@ -875,17 +1032,31 @@ async function handleTelegram(env, request) {
         return json({ ok: true });
       }
 
+      await ensureStoreSubscriptionDefaults(env, store.id);
+      const freshStore = await dbOne(env.DB.prepare('SELECT * FROM stores WHERE id = ?').bind(store.id)) || store;
+
+      if (!(await requireActiveStoreOrExplain(env, chatId, freshStore))) {
+        await clearState(env, userId);
+        return json({ ok: true });
+      }
+
       try {
         const chat = await tgCall(env, 'getChat', { chat_id: channelRef });
 
         const member = await tgCall(env, 'getChatMember', { chat_id: chat.id, user_id: userId });
         const isOwnerOrAdmin = ['creator', 'administrator'].includes(member.status);
-        if (!isOwnerOrAdmin) { await tgSendMessage(env, chatId, 'You must be an admin of that channel.'); return json({ ok: true }); }
+        if (!isOwnerOrAdmin) {
+          await tgSendMessage(env, chatId, 'You must be an admin of that channel.');
+          return json({ ok: true });
+        }
 
         const me = await tgCall(env, 'getMe', {});
         const botMember = await tgCall(env, 'getChatMember', { chat_id: chat.id, user_id: me.id });
         const botIsAdmin = ['administrator', 'creator'].includes(botMember.status);
-        if (!botIsAdmin) { await tgSendMessage(env, chatId, 'Add me as <b>Admin</b> in your channel first, then try again.'); return json({ ok: true }); }
+        if (!botIsAdmin) {
+          await tgSendMessage(env, chatId, 'Add me as <b>Admin</b> in your channel first, then try again.');
+          return json({ ok: true });
+        }
 
         await env.DB.prepare('UPDATE stores SET channel_id = ?, channel_username = ? WHERE id = ?')
           .bind(String(chat.id), String(chat.username || ''), store.id).run();
@@ -898,10 +1069,24 @@ async function handleTelegram(env, request) {
       return json({ ok: true });
     }
 
-    // Add product flow
+    // -----------------------------
+    // Add product flow (messages)
+    // -----------------------------
     if (stateEarly?.step === 'product:photo') {
       const store = await ensureStoreExists(env, userId);
-      if (!store) { await clearState(env, userId); await tgSendMessage(env, chatId, 'Create a store first.', mainMenu()); return json({ ok: true }); }
+      if (!store) {
+        await clearState(env, userId);
+        await tgSendMessage(env, chatId, 'Create a store first.', mainMenu());
+        return json({ ok: true });
+      }
+
+      await ensureStoreSubscriptionDefaults(env, store.id);
+      const freshStore = await dbOne(env.DB.prepare('SELECT * FROM stores WHERE id = ?').bind(store.id)) || store;
+
+      if (!(await requireActiveStoreOrExplain(env, chatId, freshStore))) {
+        await clearState(env, userId);
+        return json({ ok: true });
+      }
 
       if (textMsg === '/skip') {
         await setState(env, userId, { step: 'product:name', data: { store_id: store.id, photo_file_id: null } });
@@ -910,7 +1095,10 @@ async function handleTelegram(env, request) {
       }
 
       const photos = message.photo || null;
-      if (!photos) { await tgSendMessage(env, chatId, 'Send a product photo, or type /skip'); return json({ ok: true }); }
+      if (!photos) {
+        await tgSendMessage(env, chatId, 'Send a product photo, or type /skip');
+        return json({ ok: true });
+      }
 
       const best = photos[photos.length - 1];
       await setState(env, userId, { step: 'product:name', data: { store_id: store.id, photo_file_id: best.file_id } });
@@ -920,7 +1108,10 @@ async function handleTelegram(env, request) {
 
     if (stateEarly?.step === 'product:name') {
       const name = textMsg;
-      if (!name) { await tgSendMessage(env, chatId, 'Product name is required.'); return json({ ok: true }); }
+      if (!name) {
+        await tgSendMessage(env, chatId, 'Product name is required.');
+        return json({ ok: true });
+      }
       await setState(env, userId, { step: 'product:price', data: { ...stateEarly.data, name } });
       await tgSendMessage(env, chatId, 'Price? (numbers only)');
       return json({ ok: true });
@@ -928,7 +1119,10 @@ async function handleTelegram(env, request) {
 
     if (stateEarly?.step === 'product:price') {
       const price = Number(textMsg);
-      if (!Number.isFinite(price) || price < 0) { await tgSendMessage(env, chatId, 'Send a valid price (e.g. 2500).'); return json({ ok: true }); }
+      if (!Number.isFinite(price) || price < 0) {
+        await tgSendMessage(env, chatId, 'Send a valid price (e.g. 2500).');
+        return json({ ok: true });
+      }
       await setState(env, userId, { step: 'product:desc', data: { ...stateEarly.data, price } });
       await tgSendMessage(env, chatId, 'Short description? (or type /skip)');
       return json({ ok: true });
@@ -954,10 +1148,15 @@ async function handleTelegram(env, request) {
 
       const store = await dbOne(env.DB.prepare('SELECT * FROM stores WHERE id = ?').bind(store_id));
       if (store?.channel_id) {
-        const caption = `<b>${escapeHtml(name)}</b>\nPrice: ${escapeHtml(store.currency)}${escapeHtml(price)}\n${description ? `\n${escapeHtml(description)}` : ''}`;
+        const caption =
+          `<b>${escapeHtml(name)}</b>\n` +
+          `Price: ${escapeHtml(store.currency)}${escapeHtml(price)}\n` +
+          `${description ? `\n${escapeHtml(description)}` : ''}`;
 
         const deep = orderDeepLink(env, id);
-        const orderBtn = deep ? kb([[{ text: 'Order', url: deep }]]) : kb([[{ text: 'Order', callback_data: `order:${id}` }]]);
+        const orderBtn = deep
+          ? kb([[{ text: 'Order', url: deep }]])
+          : kb([[{ text: 'Order', callback_data: `order:${id}` }]]);
 
         try {
           if (photo_file_id) await tgSendPhoto(env, store.channel_id, photo_file_id, caption, orderBtn);
@@ -972,41 +1171,102 @@ async function handleTelegram(env, request) {
     return json({ ok: true });
   }
 
+  // -----------------------------
   // Callbacks
+  // -----------------------------
   if (cb) {
     const userId = cb.from.id;
     const chatId = cb.from.id; // Always DM user
     const data = cb.data || '';
     try { await tgCall(env, 'answerCallbackQuery', { callback_query_id: cb.id }); } catch {}
 
-    // Menu actions
+    // Menu: Create
     if (data === 'menu:create') {
       await setState(env, userId, { step: 'create:name', data: {} });
       await tgSendMessage(env, chatId, 'Store name?');
       return json({ ok: true });
     }
+
+    // Menu: Subscription
+    if (data === 'menu:sub') {
+      const store = await ensureStoreExists(env, userId);
+      if (!store) {
+        await tgSendMessage(env, chatId, 'Create a store first.', mainMenu());
+        return json({ ok: true });
+      }
+      await ensureStoreSubscriptionDefaults(env, store.id);
+      const freshStore = await dbOne(env.DB.prepare('SELECT * FROM stores WHERE id = ?').bind(store.id)) || store;
+
+      const badge = subscriptionBadge(freshStore);
+      const statusLabel = badge.active ? '✅ Active' : '🔒 Inactive/Expired';
+      const exp = badge.expires_at ? `<code>${escapeHtml(badge.expires_at)}</code>` : '—';
+
+      await tgSendMessage(
+        env,
+        chatId,
+        `<b>Subscription</b>\nStatus: <b>${statusLabel}</b>\nPlan: <b>${escapeHtml(badge.status)}</b>\nExpiry: ${exp}\n\nTo activate, message support: @${escapeHtml(supportUsername(env))}`,
+        kb([[{ text: 'Contact support', url: supportLink(env) }]])
+      );
+      return json({ ok: true });
+    }
+
+    // Menu: Link channel (gated)
     if (data === 'menu:link') {
+      const store = await ensureStoreExists(env, userId);
+      if (!store) {
+        await tgSendMessage(env, chatId, 'Create a store first.', mainMenu());
+        return json({ ok: true });
+      }
+      await ensureStoreSubscriptionDefaults(env, store.id);
+      const freshStore = await dbOne(env.DB.prepare('SELECT * FROM stores WHERE id = ?').bind(store.id)) || store;
+
+      if (!(await requireActiveStoreOrExplain(env, chatId, freshStore))) return json({ ok: true });
+
       await setState(env, userId, { step: 'link:channel', data: {} });
       await tgSendMessage(env, chatId, 'Send your channel @username OR forward a message.\n\nAlso: add me as <b>Admin</b> in the channel first.');
       return json({ ok: true });
     }
+
+    // Menu: Add product (gated)
     if (data === 'menu:add') {
       const store = await ensureStoreExists(env, userId);
-      if (!store) { await tgSendMessage(env, chatId, 'Create a store first.', mainMenu()); return json({ ok: true }); }
-      if (!store.channel_id) { await tgSendMessage(env, chatId, 'Link your channel first.', mainMenu()); return json({ ok: true }); }
+      if (!store) {
+        await tgSendMessage(env, chatId, 'Create a store first.', mainMenu());
+        return json({ ok: true });
+      }
+      await ensureStoreSubscriptionDefaults(env, store.id);
+      const freshStore = await dbOne(env.DB.prepare('SELECT * FROM stores WHERE id = ?').bind(store.id)) || store;
+
+      if (!(await requireActiveStoreOrExplain(env, chatId, freshStore))) return json({ ok: true });
+
+      if (!freshStore.channel_id) {
+        await tgSendMessage(env, chatId, 'Link your channel first.', mainMenu());
+        return json({ ok: true });
+      }
+
       await setState(env, userId, { step: 'product:photo', data: {} });
       await tgSendMessage(env, chatId, 'Send product photo, or type /skip');
       return json({ ok: true });
     }
+
+    // Menu: Dashboard link (gated)
     if (data === 'menu:dashboard') {
       const store = await ensureStoreExists(env, userId);
-      if (!store) { await tgSendMessage(env, chatId, 'Create a store first.', mainMenu()); return json({ ok: true }); }
-      const link = dashboardLink(env, store.owner_token);
+      if (!store) {
+        await tgSendMessage(env, chatId, 'Create a store first.', mainMenu());
+        return json({ ok: true });
+      }
+      await ensureStoreSubscriptionDefaults(env, store.id);
+      const freshStore = await dbOne(env.DB.prepare('SELECT * FROM stores WHERE id = ?').bind(store.id)) || store;
+
+      if (!(await requireActiveStoreOrExplain(env, chatId, freshStore))) return json({ ok: true });
+
+      const link = dashboardLink(env, freshStore.owner_token);
       await tgSendMessage(env, chatId, `Dashboard link:\n${link}`);
       return json({ ok: true });
     }
 
-    // Buyer: "I've paid"
+    // Buyer: I've paid
     const paidMatch = data.match(/^pay:paid:(.+)$/);
     if (paidMatch) {
       const orderId = paidMatch[1];
@@ -1056,9 +1316,7 @@ async function handleTelegram(env, request) {
       await env.DB.prepare('UPDATE orders SET status = ? WHERE id = ? AND store_id = ?')
         .bind('paid', payment.order_id, payment.store_id).run();
 
-      // Ask buyer for delivery details
       try { await promptDeliveryDetails(env, Number(payment.buyer_id), payment.order_id); } catch {}
-
       await tgSendMessage(env, chatId, `Confirmed ✅\nOrder Ref: <code>${escapeHtml(payment.order_id)}</code>`);
       return json({ ok: true });
     }
@@ -1076,7 +1334,11 @@ async function handleTelegram(env, request) {
       await env.DB.prepare('UPDATE orders SET status = ? WHERE id = ? AND store_id = ?')
         .bind('pending', payment.order_id, payment.store_id).run();
 
-      try { await tgSendMessage(env, Number(payment.buyer_id), `Payment rejected ❌\nOrder Ref: <code>${escapeHtml(payment.order_id)}</code>\n\nPlease tap the payment button again and resend proof.`); } catch {}
+      try {
+        await tgSendMessage(env, Number(payment.buyer_id),
+          `Payment rejected ❌\nOrder Ref: <code>${escapeHtml(payment.order_id)}</code>\n\nPlease tap the payment button again and resend proof.`
+        );
+      } catch {}
       await tgSendMessage(env, chatId, `Rejected ❌\nOrder Ref: <code>${escapeHtml(payment.order_id)}</code>`);
       return json({ ok: true });
     }
@@ -1089,6 +1351,7 @@ async function handleTelegram(env, request) {
 
       const order = await dbOne(env.DB.prepare('SELECT * FROM orders WHERE id = ?').bind(orderId));
       if (!order) { await tgSendMessage(env, chatId, 'Order not found.'); return json({ ok: true }); }
+
       const store = await dbOne(env.DB.prepare('SELECT * FROM stores WHERE id = ?').bind(order.store_id));
       if (!store || String(store.owner_id) !== String(userId)) { await tgSendMessage(env, chatId, 'Not allowed.'); return json({ ok: true }); }
 
@@ -1101,7 +1364,6 @@ async function handleTelegram(env, request) {
         .bind(newStatus, orderId, order.store_id).run();
 
       await tgSendMessage(env, chatId, `Updated ✅ ${statusText}\nOrder Ref: <code>${escapeHtml(orderId)}</code>`);
-
       await notifyBuyerStatus(env, Number(order.buyer_id), orderId, statusText);
       return json({ ok: true });
     }
@@ -1134,18 +1396,33 @@ async function handleTelegramOrderQty(env, message) {
   }
 
   const store = await dbOne(env.DB.prepare('SELECT * FROM stores WHERE id = ?').bind(product.store_id));
+  if (!store) {
+    await clearState(env, userId);
+    await tgSendMessage(env, chatId, 'Store not found.');
+    return json({ ok: true });
+  }
+
+  // ✅ Optional: stop new orders if store subscription expired
+  await ensureStoreSubscriptionDefaults(env, store.id);
+  const freshStore = await dbOne(env.DB.prepare('SELECT * FROM stores WHERE id = ?').bind(store.id)) || store;
+  if (!isStoreActive(freshStore)) {
+    await clearState(env, userId);
+    await tgSendMessage(env, chatId, 'This store is currently not accepting new orders.');
+    return json({ ok: true });
+  }
+
   const orderId = crypto.randomUUID();
 
   await env.DB.prepare(
     'INSERT INTO orders (id, store_id, product_id, buyer_id, buyer_username, qty, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime("now"))'
-  ).bind(orderId, store.id, productId, String(userId), String(message.from.username || ''), qty, 'pending').run();
+  ).bind(orderId, freshStore.id, productId, String(userId), String(message.from.username || ''), qty, 'pending').run();
 
   await clearState(env, userId);
 
-  await sendPaymentInstructions(env, chatId, store, product, qty, orderId);
+  await sendPaymentInstructions(env, chatId, freshStore, product, qty, orderId);
 
   try {
-    const ownerChatId = Number(store.owner_id);
+    const ownerChatId = Number(freshStore.owner_id);
     await tgSendMessage(
       env,
       ownerChatId,
@@ -1163,6 +1440,7 @@ async function debugHealth(env) {
       TELEGRAM_BOT_TOKEN: !!env.TELEGRAM_BOT_TOKEN,
       APP_BASE_URL: !!env.APP_BASE_URL,
       BOT_USERNAME: !!env.BOT_USERNAME,
+      SUPPORT_USERNAME: !!env.SUPPORT_USERNAME,
       DB: !!env.DB,
       STATE: !!env.STATE,
     },

@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Orderlyy Dashboard</title>
   <link rel="stylesheet" href="styles.css" />
-  <!-- Optional favicon later:
+  
   <link rel="icon" href="assets/logo.png" />
-  -->
+
 </head>
 <body>
   <header class="top">
@@ -43,6 +43,16 @@
     <!-- APP -->
     <section id="app" hidden>
 
+      <!-- Subscription banner (shows only when inactive/expired) -->
+      <section id="subBanner" class="card subBanner" hidden>
+        <div class="subBannerRow">
+          <div id="subBannerText" class="subBannerText"></div>
+          <div class="subBannerActions">
+            <button id="subBannerBtn" class="btn">Contact support</button>
+          </div>
+        </div>
+      </section>
+
       <!-- Tabs -->
       <nav class="tabs" aria-label="Dashboard tabs">
         <button class="tabBtn active" data-tab="overview">Overview</button>
@@ -73,7 +83,8 @@
               </div>
             </div>
 
-            <div id="kpis" class="kpiGrid">
+            <!-- KPI cards -->
+            <div class="kpiGrid">
               <div class="kpiCard">
                 <div class="kpiLabel">Orders</div>
                 <div class="kpiValue" id="kpiOrders">—</div>
@@ -99,6 +110,7 @@
               </div>
             </div>
 
+            <!-- Chart -->
             <div class="chartWrap">
               <canvas id="ordersChart" height="140"></canvas>
             </div>
@@ -188,7 +200,8 @@
                   <th>Buyer</th>
                   <th>Qty</th>
                   <th>Status</th>
-                  <th>Delivery</th>
+                  <th>Delivery details</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody></tbody>
@@ -203,8 +216,8 @@
           <div class="cardHeader">
             <h2>Payments</h2>
             <div class="row">
-              <select id="paymentStatusFilter" class="select">
-                <option value="" selected>All</option>
+              <select id="paymentsStatusFilter" class="select" title="Filter">
+                <option value="">All</option>
                 <option value="awaiting">Awaiting</option>
                 <option value="confirmed">Confirmed</option>
                 <option value="rejected">Rejected</option>
@@ -213,91 +226,81 @@
             </div>
           </div>
 
-          <div id="paymentsMsg" class="muted"></div>
-
           <div class="tableWrap">
             <table id="paymentsTable">
               <thead>
                 <tr>
-                  <th>Date</th>
+                  <th>Payment ID</th>
+                  <th>Order</th>
                   <th>Product</th>
                   <th>Buyer</th>
                   <th>Amount</th>
                   <th>Status</th>
-                  <th>Proof</th>
                   <th>Actions</th>
                 </tr>
               </thead>
               <tbody></tbody>
             </table>
           </div>
+
+          <p class="muted small" style="margin-top:10px;">
+            Tip: Use <b>View</b> to preview proof. Approve/Reject will notify the buyer automatically.
+          </p>
         </section>
-
-        <!-- Proof modal -->
-        <div id="proofModal" class="modal" hidden>
-          <div class="modalBackdrop" data-close="1"></div>
-          <div class="modalCard">
-            <div class="modalHeader">
-              <div>
-                <h3 style="margin:0;">Payment proof</h3>
-                <div id="proofMeta" class="muted small"></div>
-              </div>
-              <button id="closeProof" class="btn secondary">Close</button>
-            </div>
-
-            <div id="proofBody" class="proofBody">
-              <div class="muted">Loading proof...</div>
-            </div>
-
-            <div class="modalFooter">
-              <button id="approvePaymentBtn" class="btn">Approve</button>
-              <button id="rejectPaymentBtn" class="btn danger">Reject</button>
-            </div>
-          </div>
-        </div>
       </section>
 
       <!-- SETTINGS TAB -->
       <section id="tab-settings" class="tabPanel" hidden>
-        <section class="grid">
-          <div class="card">
-            <h2>Store info</h2>
-            <div id="storeCard" class="storeCard">Loading...</div>
+        <section class="card">
+          <div class="cardHeader">
+            <h2>Settings</h2>
           </div>
 
-          <div class="card">
-            <h2>Bank details</h2>
-            <p class="muted">These details will be shown to customers for manual transfer.</p>
+          <h3 style="margin: 6px 0 10px 0;">Bank details</h3>
+          <p class="muted small" style="margin-top:0;">
+            These details are shown to buyers for manual bank transfer.
+          </p>
 
-            <form id="bankForm" class="form">
+          <form id="bankForm" class="form">
+            <div class="grid2">
               <label>
                 Bank name
-                <input id="bankName" placeholder="e.g. GTBank" required />
+                <input id="bankName" placeholder="e.g. Opay, Moniepoint, GTBank" required />
               </label>
 
               <label>
                 Account number
-                <input id="accountNumber" placeholder="10-digit account number" required />
+                <input id="accountNumber" inputmode="numeric" placeholder="10-digit account number" required />
               </label>
+            </div>
 
-              <label>
-                Account name
-                <input id="accountName" placeholder="Account holder name" required />
-              </label>
+            <label>
+              Account name
+              <input id="accountName" placeholder="Account name on bank" required />
+            </label>
 
-              <div class="row">
-                <button class="btn" type="submit">Save</button>
-                <button id="bankClear" class="btn secondary" type="button">Clear</button>
-              </div>
+            <div class="row">
+              <button class="btn" type="submit">Save bank details</button>
+            </div>
 
-              <div id="bankMsg" class="muted"></div>
-            </form>
-          </div>
+            <div id="bankMsg" class="muted"></div>
+          </form>
         </section>
       </section>
 
     </section>
   </main>
+
+  <!-- Payment modal -->
+  <div id="payModal" class="modal" hidden>
+    <div class="modalBox">
+      <div class="modalHeader">
+        <div id="payModalTitle" class="modalTitle">Payment</div>
+        <button id="payModalClose" class="btn secondary smallBtn" type="button">Close</button>
+      </div>
+      <div id="payModalBody"></div>
+    </div>
+  </div>
 
   <!-- Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
