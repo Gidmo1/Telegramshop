@@ -3,14 +3,22 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>CreateYourShopBot Dashboard</title>
+  <title>Orderlyy Dashboard</title>
   <link rel="stylesheet" href="styles.css" />
+  <!-- Optional favicon later:
+  <link rel="icon" href="assets/logo.png" />
+  -->
 </head>
 <body>
   <header class="top">
-    <div>
-      <h1>CreateYourShopBot Dashboard</h1>
-      <p class="muted" id="storeSubtitle">Use the dashboard link given by the bot (it contains your token). If you opened this page manually, paste your token below.</p>
+    <div class="brandRow">
+      <img class="brandLogo" src="assets/logo.png" alt="Orderlyy" onerror="this.style.display='none'"/>
+      <div>
+        <h1>Orderlyy Dashboard</h1>
+        <p class="muted" id="storeSubtitle">
+          Use the dashboard link given by the bot (it contains your token). If you opened this page manually, paste your token below.
+        </p>
+      </div>
     </div>
     <div class="right">
       <button id="logoutBtn" class="btn secondary" hidden>Logout</button>
@@ -18,6 +26,7 @@
   </header>
 
   <main class="container">
+    <!-- LOGIN -->
     <section id="login" class="card">
       <h2>Login</h2>
       <p class="muted">Token is your private key. Don’t share it.</p>
@@ -25,105 +34,174 @@
         <input id="tokenInput" placeholder="Paste your token here" />
         <button id="loginBtn" class="btn">Enter</button>
       </div>
-      <p class="muted">Tip: adding product photos is easiest via the bot (Telegram stores the image and gives a reusable file_id). In the dashboard you can paste an existing <code>photo_file_id</code>.</p>
+      <p class="muted">
+        Tip: adding product photos is easiest via the bot (Telegram stores the image and gives a reusable file_id).
+        In the dashboard you can paste an existing <code>photo_file_id</code>.
+      </p>
     </section>
 
+    <!-- APP -->
     <section id="app" hidden>
-      <section class="grid">
-        <div class="card">
-          <h2>Store</h2>
-          <div id="storeInfo" class="muted">Loading...</div>
-        </div>
-        <div class="card">
-          <h2>Quick stats</h2>
-          <div id="stats" class="muted">Loading...</div>
-        </div>
-      </section>
 
-      <section class="card">
-        <div class="cardHeader">
-          <h2>Products</h2>
-          <button id="refreshProducts" class="btn secondary">Refresh</button>
-        </div>
+      <!-- Tabs -->
+      <nav class="tabs" aria-label="Dashboard tabs">
+        <button class="tabBtn active" data-tab="overview">Overview</button>
+        <button class="tabBtn" data-tab="products">Products</button>
+        <button class="tabBtn" data-tab="orders">Orders</button>
+      </nav>
 
-        <form id="productForm" class="form">
-          <div class="grid2">
-            <label>
-              Name
-              <input name="name" required />
-            </label>
-            <label>
-              Price (number)
-              <input name="price" type="number" required />
-            </label>
+      <!-- OVERVIEW TAB -->
+      <section id="tab-overview" class="tabPanel">
+        <section class="grid">
+          <div class="card">
+            <h2>Store</h2>
+            <div id="storeInfo" class="muted">Loading...</div>
           </div>
 
-          <label>
-            Description
-            <textarea name="description" rows="2"></textarea>
-          </label>
+          <div class="card">
+            <div class="cardHeader">
+              <h2>Analytics</h2>
+              <div class="row">
+                <label class="muted" for="periodSelect" style="margin-right:8px;">Period</label>
+                <select id="periodSelect" class="select">
+                  <option value="7d">Last 7 days</option>
+                  <option value="30d" selected>Last 30 days</option>
+                  <option value="90d">Last 90 days</option>
+                </select>
+              </div>
+            </div>
 
-          <div class="grid2">
-            <label>
-              In stock
-              <select name="in_stock">
-                <option value="1">Yes</option>
-                <option value="0">No</option>
-              </select>
-            </label>
-            <label>
-              Photo file_id (optional)
-              <input name="photo_file_id" placeholder="Paste Telegram file_id" />
-            </label>
+            <!-- KPI cards (app.js will fill these) -->
+            <div id="kpis" class="kpiGrid">
+              <div class="kpiCard">
+                <div class="kpiLabel">Orders</div>
+                <div class="kpiValue" id="kpiOrders">—</div>
+                <div class="kpiDelta muted" id="kpiOrdersDelta">—</div>
+              </div>
+
+              <div class="kpiCard">
+                <div class="kpiLabel">Revenue</div>
+                <div class="kpiValue" id="kpiRevenue">—</div>
+                <div class="kpiDelta muted" id="kpiRevenueDelta">—</div>
+              </div>
+
+              <div class="kpiCard">
+                <div class="kpiLabel">Pending</div>
+                <div class="kpiValue" id="kpiPending">—</div>
+                <div class="kpiDelta muted" id="kpiPendingDelta">—</div>
+              </div>
+
+              <div class="kpiCard">
+                <div class="kpiLabel">Products</div>
+                <div class="kpiValue" id="kpiProducts">—</div>
+                <div class="kpiDelta muted" id="kpiProductsDelta">—</div>
+              </div>
+            </div>
+
+            <!-- Chart -->
+            <div class="chartWrap">
+              <canvas id="ordersChart" height="140"></canvas>
+            </div>
+
+            <div class="muted" id="analyticsMsg"></div>
           </div>
-
-          <div class="row">
-            <button class="btn" type="submit">Add product</button>
-            <button id="clearForm" class="btn secondary" type="button">Clear</button>
-          </div>
-          <div id="productFormMsg" class="muted"></div>
-        </form>
-
-        <div class="tableWrap">
-          <table id="productsTable">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Price</th>
-                <th>Stock</th>
-                <th>Photo</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
+        </section>
       </section>
 
-      <section class="card">
-        <div class="cardHeader">
-          <h2>Orders</h2>
-          <button id="refreshOrders" class="btn secondary">Refresh</button>
-        </div>
-        <div class="tableWrap">
-          <table id="ordersTable">
-            <thead>
-              <tr>
-                <th>Order ID</th>
-                <th>Product</th>
-                <th>Buyer</th>
-                <th>Qty</th>
-                <th>Status</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
+      <!-- PRODUCTS TAB -->
+      <section id="tab-products" class="tabPanel" hidden>
+        <section class="card">
+          <div class="cardHeader">
+            <h2>Products</h2>
+            <button id="refreshProducts" class="btn secondary">Refresh</button>
+          </div>
+
+          <form id="productForm" class="form">
+            <div class="grid2">
+              <label>
+                Name
+                <input name="name" required />
+              </label>
+              <label>
+                Price (number)
+                <input name="price" type="number" required />
+              </label>
+            </div>
+
+            <label>
+              Description
+              <textarea name="description" rows="2"></textarea>
+            </label>
+
+            <div class="grid2">
+              <label>
+                In stock
+                <select name="in_stock">
+                  <option value="1">Yes</option>
+                  <option value="0">No</option>
+                </select>
+              </label>
+              <label>
+                Photo file_id (optional)
+                <input name="photo_file_id" placeholder="Paste Telegram file_id" />
+              </label>
+            </div>
+
+            <div class="row">
+              <button class="btn" type="submit">Add product</button>
+              <button id="clearForm" class="btn secondary" type="button">Clear</button>
+            </div>
+            <div id="productFormMsg" class="muted"></div>
+          </form>
+
+          <div class="tableWrap">
+            <table id="productsTable">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Price</th>
+                  <th>Stock</th>
+                  <th>Photo</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
       </section>
+
+      <!-- ORDERS TAB -->
+      <section id="tab-orders" class="tabPanel" hidden>
+        <section class="card">
+          <div class="cardHeader">
+            <h2>Orders</h2>
+            <button id="refreshOrders" class="btn secondary">Refresh</button>
+          </div>
+
+          <div class="tableWrap">
+            <table id="ordersTable">
+              <thead>
+                <tr>
+                  <th>Order ID</th>
+                  <th>Product</th>
+                  <th>Buyer</th>
+                  <th>Qty</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
     </section>
   </main>
 
+  <!-- Chart.js (lightweight CDN) -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

@@ -131,12 +131,155 @@ function methodNotAllowed() {
   return new Response('Method Not Allowed', { status: 405 });
 }
 
+/* -----------------------------
+   Analytics helpers
+------------------------------ */
+function clampPeriod(period) {
+  const p = String(period || '').toLowerCase();
+  if (p === '7d' || p === '30d' || p === '90d') return p;
+  return '30d';
+}
+function daysForPeriod(p) {
+  if (p === '7d') return 7;
+  if (p === '90d') return 90;
+  return 30;
+}
+function pctChange(current, previous) {
+  const c = Number(current || 0);
+  const p = Number(previous || 0);
+  if (p === 0 && c === 0) return 0;
+  if (p === 0) return 100; // from 0 to something => +100% (simplified)
+  return ((c - p) / p) * 100;
+}
+function asNumber(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+async function handleAnalytics(env, store, request) {
+  if (request.method !== 'GET') return methodNotAllowed();
+
+  const url = new URL(request.url);
+  const period = clampPeriod(url.searchParams.get('period'));
+  const days = daysForPeriod(period);
+
+  // Current range: last N days, inclusive of today.
+  // Previous range: the N days before that.
+  //
+  // Using sqlite datetime with 'now' keeps everything in UTC. That's fine for v1.
+
+  // Orders + revenue totals (current)
+  const curAgg = await dbOne(env.DB.prepare(`
+    SELECT
+      COUNT(*) AS orders_total,
+      COALESCE(SUM(p.price * o.qty), 0) AS revenue_total,
+      SUM(CASE WHEN o.status = 'pending' THEN 1 ELSE 0 END) AS pending_total
+    FROM orders o
+    LEFT JOIN products p ON p.id = o.product_id
+    WHERE o.store_id = ?
+      AND o.created_at >= datetime('now', ?)
+  `).bind(store.id, `-${days} days`));
+
+  // Orders + revenue totals (previous)
+  const prevAgg = await dbOne(env.DB.prepare(`
+    SELECT
+      COUNT(*) AS orders_total,
+      COALESCE(SUM(p.price * o.qty), 0) AS revenue_total,
+      SUM(CASE WHEN o.status = 'pending' THEN 1 ELSE 0 END) AS pending_total
+    FROM orders o
+    LEFT JOIN products p ON p.id = o.product_id
+    WHERE o.store_id = ?
+      AND o.created_at >= datetime('now', ?)
+      AND o.created_at <  datetime('now', ?)
+  `).bind(store.id, `-${days * 2} days`, `-${days} days`));
+
+  // Products count (current & previous)
+  const curProducts = await dbOne(env.DB.prepare(`
+    SELECT COUNT(*) AS products_total
+    FROM products
+    WHERE store_id = ?
+      AND created_at >= datetime('now', ?)
+  `).bind(store.id, `-${days} days`));
+
+  const prevProducts = await dbOne(env.DB.prepare(`
+    SELECT COUNT(*) AS products_total
+    FROM products
+    WHERE store_id = ?
+      AND created_at >= datetime('now', ?)
+      AND created_at <  datetime('now', ?)
+  `).bind(store.id, `-${days * 2} days`, `-${days} days`));
+
+  // Chart series: daily order counts in current period
+  const seriesRes = await env.DB.prepare(`
+    SELECT
+      strftime('%Y-%m-%d', o.created_at) AS day,
+      COUNT(*) AS count
+    FROM orders o
+    WHERE o.store_id = ?
+      AND o.created_at >= datetime('now', ?)
+    GROUP BY day
+    ORDER BY day ASC
+  `).bind(store.id, `-${days} days`).all();
+
+  // Build labels for each day in range so missing days show 0
+  // We'll generate labels in JS based on UTC date.
+  const labels = [];
+  const values = [];
+  const map = new Map((seriesRes.results || []).map(r => [r.day, asNumber(r.count)]));
+  const now = new Date();
+  // Start date: today - (days-1)
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  start.setUTCDate(start.getUTCDate() - (days - 1));
+
+  for (let i = 0; i < days; i++) {
+    const d = new Date(start);
+    d.setUTCDate(start.getUTCDate() + i);
+    const y = d.getUTCFullYear();
+    const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+    const dd = String(d.getUTCDate()).padStart(2, '0');
+    const key = `${y}-${m}-${dd}`;
+    labels.push(key);
+    values.push(map.get(key) || 0);
+  }
+
+  const orders_total = asNumber(curAgg?.orders_total);
+  const revenue_total = asNumber(curAgg?.revenue_total);
+  const pending_total = asNumber(curAgg?.pending_total);
+  const products_total = asNumber(curProducts?.products_total);
+
+  const orders_prev = asNumber(prevAgg?.orders_total);
+  const revenue_prev = asNumber(prevAgg?.revenue_total);
+  const pending_prev = asNumber(prevAgg?.pending_total);
+  const products_prev = asNumber(prevProducts?.products_total);
+
+  const analytics = {
+    period,
+    days,
+    orders_total,
+    orders_change_pct: pctChange(orders_total, orders_prev),
+    revenue_total,
+    revenue_change_pct: pctChange(revenue_total, revenue_prev),
+    pending_total,
+    pending_change_pct: pctChange(pending_total, pending_prev),
+    products_total,
+    products_change_pct: pctChange(products_total, products_prev),
+    series: { labels, values },
+  };
+
+  return json({ ok: true, analytics });
+}
+
 async function handleApi(env, request) {
   const url = new URL(request.url);
   const path = url.pathname;
 
   const store = await authStore(env, request);
   if (!store) return json({ ok: false, error: 'unauthorized' }, { status: 401 });
+
+  // ✅ Analytics endpoint
+  if (path === '/api/analytics') {
+    return handleAnalytics(env, store, request);
+  }
 
   if (path === '/api/store') {
     if (request.method !== 'GET') return methodNotAllowed();
@@ -268,7 +411,7 @@ async function handleTelegram(env, request) {
       await tgSendMessage(
         env,
         chatId,
-        'Welcome to <b>CreateYourShopBot</b>\n\nUse the menu to create your store, link your channel, and add products.',
+        'Welcome to <b>Orderlyy</b>\n\nCreate a store, link your channel, and add products — all inside Telegram.',
         mainMenu()
       );
       return json({ ok: true });

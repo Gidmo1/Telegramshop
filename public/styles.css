@@ -6,6 +6,11 @@
   --border: #1f2a40;
   --accent: #4c8bf5;
   --danger: #ff4d4d;
+
+  /* New */
+  --good: #2ee59d;
+  --warn: #ffb020;
+  --shadow: 0 10px 30px rgba(0,0,0,0.35);
 }
 
 * { box-sizing: border-box; }
@@ -27,6 +32,7 @@ body {
   position: sticky;
   top: 0;
   backdrop-filter: blur(10px);
+  z-index: 50;
 }
 
 h1 { margin: 0; font-size: 18px; }
@@ -42,7 +48,7 @@ h1 { margin: 0; font-size: 18px; }
   border: 1px solid var(--border);
   border-radius: 14px;
   padding: 16px;
-  box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+  box-shadow: var(--shadow);
 }
 
 .grid {
@@ -138,3 +144,157 @@ tbody td {
 
 .small { font-size: 12px; }
 code { color: #c7d4ff; }
+
+/* ------------------------------
+   NEW: Brand row + logo
+-------------------------------- */
+.brandRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.brandLogo {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  object-fit: cover;
+  border: 1px solid var(--border);
+  background: #0f1422;
+}
+
+/* ------------------------------
+   NEW: Tabs
+-------------------------------- */
+.tabs {
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  background: rgba(18,24,38,0.6);
+  border-radius: 14px;
+  margin: 0 0 16px 0;
+  position: sticky;
+  top: 74px; /* below header */
+  z-index: 40;
+  backdrop-filter: blur(10px);
+}
+
+.tabBtn {
+  appearance: none;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 12px;
+  padding: 10px 12px;
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 13px;
+  transition: 120ms ease;
+}
+
+.tabBtn:hover {
+  background: rgba(255,255,255,0.04);
+  color: var(--text);
+}
+
+.tabBtn.active {
+  background: rgba(76,139,245,0.16);
+  border-color: rgba(76,139,245,0.35);
+  color: var(--text);
+}
+
+.tabPanel { animation: fadeIn 120ms ease; }
+
+@keyframes fadeIn {
+  from { opacity: 0.7; transform: translateY(2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@media (max-width: 600px) {
+  .tabs { top: 88px; overflow-x: auto; }
+  .tabBtn { white-space: nowrap; }
+}
+
+/* ------------------------------
+   NEW: Card header + table wrap
+-------------------------------- */
+.cardHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.tableWrap {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+/* ------------------------------
+   NEW: KPI cards
+-------------------------------- */
+.kpiGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+}
+
+@media (max-width: 900px) {
+  .kpiGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+.kpiCard {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px;
+  background: rgba(15,20,34,0.55);
+}
+
+.kpiLabel {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.kpiValue {
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: 0.2px;
+}
+
+.kpiDelta {
+  margin-top: 6px;
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.deltaUp { color: var(--good); }
+.deltaDown { color: var(--danger); }
+.deltaFlat { color: var(--muted); }
+
+.tri {
+  display: inline-block;
+  width: 0; height: 0;
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+}
+
+.tri.up { border-bottom: 10px solid var(--good); }
+.tri.down { border-top: 10px solid var(--danger); }
+
+/* ------------------------------
+   NEW: Chart wrap
+-------------------------------- */
+.chartWrap {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px;
+  background: rgba(15,20,34,0.55);
+}
