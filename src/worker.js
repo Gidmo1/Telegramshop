@@ -1,7 +1,3 @@
-// CreateYourShopBot - Cloudflare Worker (Production MVP)
-// Secrets: TELEGRAM_BOT_TOKEN, APP_BASE_URL
-// Bindings: DB (D1), STATE (KV)
-
 const JSON_HEADERS = { 'content-type': 'application/json; charset=utf-8' };
 
 function json(data, init = {}) {
@@ -98,8 +94,19 @@ async function clearState(env, userId) {
   await env.STATE.delete(`state:${userId}`);
 }
 
+/**
+ * ✅ Cloudflare D1 FIX:
+ * D1 prepared statements DO NOT have stmt.limit().
+ * Use stmt.first() (preferred) or stmt.all() and take results[0].
+ */
 async function dbOne(stmt) {
-  const out = await stmt.limit(1).all();
+  // Use .first() if available (it is in D1).
+  if (typeof stmt.first === 'function') {
+    const row = await stmt.first();
+    return row ?? null;
+  }
+  // Fallback (rare)
+  const out = await stmt.all();
   return out.results?.[0] || null;
 }
 
@@ -140,20 +147,25 @@ async function handleApi(env, request) {
   // /api/store
   if (path === '/api/store') {
     if (request.method !== 'GET') return methodNotAllowed();
-    return json({ ok: true, store: {
-      id: store.id,
-      name: store.name,
-      currency: store.currency,
-      delivery_note: store.delivery_note,
-      channel_id: store.channel_id,
-      channel_username: store.channel_username,
-    }});
+    return json({
+      ok: true,
+      store: {
+        id: store.id,
+        name: store.name,
+        currency: store.currency,
+        delivery_note: store.delivery_note,
+        channel_id: store.channel_id,
+        channel_username: store.channel_username,
+      },
+    });
   }
 
   // /api/products
   if (path === '/api/products') {
     if (request.method === 'GET') {
-      const res = await env.DB.prepare('SELECT * FROM products WHERE store_id = ? ORDER BY created_at DESC').bind(store.id).all();
+      const res = await env.DB.prepare(
+        'SELECT * FROM products WHERE store_id = ? ORDER BY created_at DESC'
+      ).bind(store.id).all();
       return json({ ok: true, products: res.results || [] });
     }
     if (request.method === 'POST') {
@@ -209,7 +221,8 @@ async function handleApi(env, request) {
     const body = await readJson(request);
     const status = String(body?.status || '').trim();
     if (!status) return json({ ok: false, error: 'status_required' }, { status: 400 });
-    await env.DB.prepare('UPDATE orders SET status = ? WHERE id = ? AND store_id = ?').bind(status, orderId, store.id).run();
+    await env.DB.prepare('UPDATE orders SET status = ? WHERE id = ? AND store_id = ?')
+      .bind(status, orderId, store.id).run();
     return json({ ok: true });
   }
 
@@ -217,7 +230,11 @@ async function handleApi(env, request) {
 }
 
 async function ensureStoreExists(env, ownerId) {
-  const store = await dbOne(env.DB.prepare('SELECT * FROM stores WHERE owner_id = ? ORDER BY created_at DESC').bind(String(ownerId)));
+  // ✅ safer: put LIMIT 1 in SQL
+  const store = await dbOne(
+    env.DB.prepare('SELECT * FROM stores WHERE owner_id = ? ORDER BY created_at DESC LIMIT 1')
+      .bind(String(ownerId))
+  );
   return store;
 }
 
@@ -242,7 +259,9 @@ async function handleTelegram(env, request) {
     // /start
     if (textMsg.startsWith('/start')) {
       await clearState(env, userId);
-      await tgSendMessage(env, chatId,
+      await tgSendMessage(
+        env,
+        chatId,
         'Welcome to <b>CreateYourShopBot</b>\n\nUse the menu to create your store, link your channel, and add products.',
         mainMenu()
       );
@@ -282,7 +301,9 @@ async function handleTelegram(env, request) {
 
       await clearState(env, userId);
       const link = dashboardLink(env, owner_token);
-      await tgSendMessage(env, chatId,
+      await tgSendMessage(
+        env,
+        chatId,
         `Store created ✅\n\n<b>${name}</b>\nDashboard: ${link}\n\nNext: tap <b>Link channel</b> in the menu and add me as admin in your Telegram channel.`,
         mainMenu()
       );
@@ -296,7 +317,11 @@ async function handleTelegram(env, request) {
         channelRef = String(message.forward_from_chat.id);
       }
       if (!channelRef) {
-        await tgSendMessage(env, chatId, 'Send your channel @username (e.g. @myshopchannel) OR forward a message from your channel.');
+        await tgSendMessage(
+          env,
+          chatId,
+          'Send your channel @username (e.g. @myshopchannel) OR forward a message from your channel.'
+        );
         return json({ ok: true });
       }
 
@@ -310,6 +335,7 @@ async function handleTelegram(env, request) {
       // Verify bot is admin in the channel
       try {
         const chat = await tgCall(env, 'getChat', { chat_id: channelRef });
+
         const member = await tgCall(env, 'getChatMember', { chat_id: chat.id, user_id: userId });
         const isOwnerOrAdmin = ['creator', 'administrator'].includes(member.status);
         if (!isOwnerOrAdmin) {
@@ -322,19 +348,21 @@ async function handleTelegram(env, request) {
         const botMember = await tgCall(env, 'getChatMember', { chat_id: chat.id, user_id: me.id });
         const botIsAdmin = ['administrator', 'creator'].includes(botMember.status);
         if (!botIsAdmin) {
-          await tgSendMessage(env, chatId,
-            'Add me as <b>Admin</b> in your channel first (permission to post messages), then try again.');
+          await tgSendMessage(
+            env,
+            chatId,
+            'Add me as <b>Admin</b> in your channel first (permission to post messages), then try again.'
+          );
           return json({ ok: true });
         }
 
-        await env.DB.prepare(
-          'UPDATE stores SET channel_id = ?, channel_username = ? WHERE id = ?'
-        ).bind(String(chat.id), String(chat.username || ''), store.id).run();
+        await env.DB.prepare('UPDATE stores SET channel_id = ?, channel_username = ? WHERE id = ?')
+          .bind(String(chat.id), String(chat.username || ''), store.id).run();
 
         await clearState(env, userId);
         await tgSendMessage(env, chatId, 'Channel linked ✅\nNow you can add products.', mainMenu());
       } catch (e) {
-        await tgSendMessage(env, chatId, `Could not link channel. Make sure it's a valid channel and I am admin there.`);
+        await tgSendMessage(env, chatId, 'Could not link channel. Make sure it’s a valid channel and I am admin there.');
       }
       return json({ ok: true });
     }
@@ -501,10 +529,12 @@ async function handleTelegramOrderQty(env, message) {
   const qty = Number((message.text || '').trim());
   const state = await getState(env, userId);
   if (!state || state.step !== 'order:qty') return false;
+
   if (!Number.isFinite(qty) || qty <= 0) {
     await tgSendMessage(env, chatId, 'Send a valid quantity (e.g. 1).');
     return true;
   }
+
   const productId = state.data.product_id;
   const product = await dbOne(env.DB.prepare('SELECT * FROM products WHERE id = ?').bind(productId));
   if (!product) {
@@ -512,22 +542,28 @@ async function handleTelegramOrderQty(env, message) {
     await tgSendMessage(env, chatId, 'Product not found.');
     return true;
   }
+
   const store = await dbOne(env.DB.prepare('SELECT * FROM stores WHERE id = ?').bind(product.store_id));
   const orderId = crypto.randomUUID();
+
   await env.DB.prepare(
     'INSERT INTO orders (id, store_id, product_id, buyer_id, buyer_username, qty, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime("now"))'
   ).bind(orderId, store.id, productId, String(userId), String(message.from.username || ''), qty, 'pending').run();
 
   await clearState(env, userId);
 
-  await tgSendMessage(env, chatId,
+  await tgSendMessage(
+    env,
+    chatId,
     `Order placed ✅\n\n<b>${product.name}</b>\nQty: ${qty}\nRef: <code>${orderId}</code>\n\nThe seller will contact you soon.`
   );
 
   // Notify owner
   try {
     const ownerChatId = Number(store.owner_id);
-    await tgSendMessage(env, ownerChatId,
+    await tgSendMessage(
+      env,
+      ownerChatId,
       `New order ✅\n\n<b>${product.name}</b>\nQty: ${qty}\nBuyer: @${message.from.username || 'unknown'}\nRef: <code>${orderId}</code>`
     );
   } catch {}
