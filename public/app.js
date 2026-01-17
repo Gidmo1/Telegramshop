@@ -16,7 +16,8 @@
     overview: $('tab-overview'),
     products: $('tab-products'),
     orders: $('tab-orders'),
-    settings: $('tab-settings'), // ✅ NEW (won't break if missing)
+    payments: $('tab-payments'),
+    settings: $('tab-settings'),
   };
 
   // Overview / Analytics
@@ -49,6 +50,20 @@
   const ordersTable = $('ordersTable');
   const ordersTbody = ordersTable ? ordersTable.querySelector('tbody') : null;
 
+  // Payments
+  const paymentStatusFilter = $('paymentStatusFilter');
+  const refreshPaymentsBtn = $('refreshPayments');
+  const paymentsMsg = $('paymentsMsg');
+  const paymentsTable = $('paymentsTable');
+  const paymentsTbody = paymentsTable ? paymentsTable.querySelector('tbody') : null;
+
+  const proofModal = $('proofModal');
+  const closeProof = $('closeProof');
+  const proofMeta = $('proofMeta');
+  const proofBody = $('proofBody');
+  const approvePaymentBtn = $('approvePaymentBtn');
+  const rejectPaymentBtn = $('rejectPaymentBtn');
+
   // Settings (Bank)
   const storeCard = $('storeCard');
   const bankForm = $('bankForm');
@@ -65,6 +80,10 @@
   let cachedStore = null;
   let cachedProducts = [];
   let cachedOrders = [];
+  let cachedPayments = [];
+
+  // Modal state
+  let selectedPaymentId = null;
 
   // ---------- Token helpers ----------
   function getTokenFromUrl() {
@@ -109,20 +128,36 @@
     return data;
   }
 
+  // ---------- Formatting ----------
   function formatMoney(currency, value) {
+    if (value === null || value === undefined) return '—';
     if (!currency) return String(value);
     return `${currency}${value}`;
   }
 
+  function formatDate(isoOrSqlite) {
+    try {
+      const d = new Date(isoOrSqlite);
+      if (Number.isNaN(d.getTime())) return String(isoOrSqlite || '');
+      return d.toLocaleString();
+    } catch {
+      return String(isoOrSqlite || '');
+    }
+  }
+
   // ---------- Tabs ----------
   function setActiveTab(tabName) {
-    tabButtons.forEach((b) => {
-      b.classList.toggle('active', b.dataset.tab === tabName);
-    });
+    tabButtons.forEach((b) => b.classList.toggle('active', b.dataset.tab === tabName));
     Object.entries(tabPanels).forEach(([name, el]) => {
       if (!el) return;
       el.hidden = name !== tabName;
     });
+
+    // Lazy loads (so opening dashboard is fast)
+    if (tabName === 'payments') loadPaymentsSafe();
+    if (tabName === 'orders') loadOrders().catch(() => {});
+    if (tabName === 'products') loadProducts().catch(() => {});
+    if (tabName === 'settings') loadStore().catch(() => {});
   }
 
   // ---------- UI show/hide ----------
@@ -190,9 +225,11 @@
   async function loadStore() {
     const store = (await api('/api/store')).store;
     cachedStore = store;
+
     renderStoreOverview(store);
     renderStoreSettingsCard(store);
     populateBankForm(store);
+
     return store;
   }
 
@@ -205,38 +242,31 @@
 
   function validAccountNumber(s) {
     const t = String(s || '').trim();
-    return /^[0-9]{10}$/.test(t); // Nigeria style 10 digits
+    return /^[0-9]{10}$/.test(t);
   }
 
   async function saveBankDetails() {
-    if (!cachedStore) throw new Error('Store not loaded');
-    if (!bankName || !accountNumber || !accountName) return;
+    if (!cachedStore) await loadStore();
 
     const payload = {
-      bank_name: String(bankName.value || '').trim(),
-      account_number: String(accountNumber.value || '').trim(),
-      account_name: String(accountName.value || '').trim(),
+      bank_name: String(bankName?.value || '').trim(),
+      account_number: String(accountNumber?.value || '').trim(),
+      account_name: String(accountName?.value || '').trim(),
     };
 
     if (!payload.bank_name || !payload.account_number || !payload.account_name) {
       setBankMsg('Please fill all bank fields.', false);
       return;
     }
-
     if (!validAccountNumber(payload.account_number)) {
       setBankMsg('Account number must be 10 digits.', false);
       return;
     }
 
     setBankMsg('Saving...', true);
-
-    // Preferred endpoint (add this in worker): PUT /api/store/bank
-    // If not added yet, this will show a clear error.
     await api('/api/store/bank', { method: 'PUT', body: payload });
-
-    // Refresh store view
     await loadStore();
-    setBankMsg('Saved ✅ Customers will now see your bank details.', true);
+    setBankMsg('Saved ✅', true);
   }
 
   // ---------- Products ----------
@@ -362,7 +392,6 @@
     if (stockSel) stockSel.value = '1';
 
     productFormMsg.textContent = 'Product added ✅';
-
     await loadProducts();
     await loadAnalyticsSafe();
   }
@@ -374,43 +403,37 @@
     return cachedOrders;
   }
 
+  function statusBadge(status) {
+    const s = String(status || '').toLowerCase();
+    if (s.includes('awaiting')) return `<span class="badge">Awaiting</span>`;
+    if (s === 'paid') return `<span class="badge">Paid</span>`;
+    if (s === 'packed') return `<span class="badge">Packed</span>`;
+    if (s.includes('out')) return `<span class="badge">Out</span>`;
+    if (s === 'delivered') return `<span class="badge">Delivered</span>`;
+    if (s === 'pending') return `<span class="badge">Pending</span>`;
+    return `<span class="badge">${escapeHtml(status)}</span>`;
+  }
+
   function renderOrders() {
     if (!ordersTbody) return;
     ordersTbody.innerHTML = '';
 
     for (const o of cachedOrders) {
+      const delivery = o.delivery_text ? escapeHtml(o.delivery_text) : '<span class="muted">—</span>';
+
       const tr = document.createElement('tr');
       tr.innerHTML = `
         <td><code>${escapeHtml(o.id)}</code></td>
         <td>${escapeHtml(o.product_name || '')}</td>
         <td>${o.buyer_username ? '@' + escapeHtml(o.buyer_username) : '<span class="muted">(unknown)</span>'}</td>
         <td>${escapeHtml(String(o.qty))}</td>
-        <td>${escapeHtml(o.status)}</td>
-        <td>
-          <button class="btn secondary smallBtn" data-act="done" data-id="${escapeAttr(o.id)}">Done</button>
-          <button class="btn secondary smallBtn" data-act="pending" data-id="${escapeAttr(o.id)}">Pending</button>
-        </td>
+        <td>${statusBadge(o.status)}</td>
+        <td class="muted" style="max-width:320px; white-space:pre-wrap;">${delivery}</td>
       `;
       ordersTbody.appendChild(tr);
     }
 
-    ordersTbody.querySelectorAll('button').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        const act = btn.getAttribute('data-act');
-        const id = btn.getAttribute('data-id');
-
-        try {
-          const status = act === 'done' ? 'done' : 'pending';
-          await api(`/api/orders/${encodeURIComponent(id)}/status`, { method: 'PUT', body: { status } });
-          await loadOrders();
-          await loadAnalyticsSafe();
-        } catch (e) {
-          alert(e.message);
-        }
-      });
-    });
-
-    const pendingCount = cachedOrders.filter((o) => o.status === 'pending').length;
+    const pendingCount = cachedOrders.filter((o) => String(o.status) === 'pending').length;
     setKpiValue(kpiPending, pendingCount);
   }
 
@@ -504,7 +527,7 @@
       setKpiValue(kpiRevenue, a.revenue_total ?? 0);
       setDelta(kpiRevenueDelta, a.revenue_change_pct);
 
-      const pendingFallback = cachedOrders.filter((o) => o.status === 'pending').length;
+      const pendingFallback = cachedOrders.filter((o) => String(o.status) === 'pending').length;
       setKpiValue(kpiPending, a.pending_total ?? pendingFallback);
       setDelta(kpiPendingDelta, a.pending_change_pct);
 
@@ -517,7 +540,7 @@
 
       if (analyticsMsg) analyticsMsg.textContent = '';
     } catch (e) {
-      const pending = cachedOrders.filter((o) => o.status === 'pending').length;
+      const pending = cachedOrders.filter((o) => String(o.status) === 'pending').length;
 
       setKpiValue(kpiOrders, cachedOrders.length);
       setDelta(kpiOrdersDelta, null);
@@ -533,6 +556,179 @@
 
       if (analyticsMsg) analyticsMsg.textContent = `Analytics error: ${e.message}`;
     }
+  }
+
+  // ---------- Payments ----------
+  function setPaymentsMsg(text, ok = true) {
+    if (!paymentsMsg) return;
+    paymentsMsg.textContent = text || '';
+    paymentsMsg.style.color = ok ? 'var(--muted)' : 'var(--danger)';
+  }
+
+  async function loadPaymentsSafe() {
+    try {
+      await loadPayments();
+    } catch (e) {
+      setPaymentsMsg(`Payments error: ${e.message}`, false);
+    }
+  }
+
+  async function loadPayments() {
+    if (!paymentsTbody) return [];
+
+    setPaymentsMsg('Loading...', true);
+
+    const status = String(paymentStatusFilter?.value || '').trim();
+    const q = status ? `?status=${encodeURIComponent(status)}` : '';
+    const out = await api(`/api/payments${q}`);
+
+    cachedPayments = out.payments || [];
+    renderPayments();
+    setPaymentsMsg(cachedPayments.length ? '' : 'No payments found.', true);
+    return cachedPayments;
+  }
+
+  function paymentStatusPill(status) {
+    const s = String(status || '').toLowerCase();
+    if (s === 'awaiting') return `<span class="badge">Awaiting</span>`;
+    if (s === 'confirmed') return `<span class="badge">Confirmed</span>`;
+    if (s === 'rejected') return `<span class="badge">Rejected</span>`;
+    return `<span class="badge">${escapeHtml(status)}</span>`;
+  }
+
+  function renderPayments() {
+    if (!paymentsTbody || !cachedStore) return;
+    paymentsTbody.innerHTML = '';
+
+    for (const pay of cachedPayments) {
+      const tr = document.createElement('tr');
+      const buyer = pay.buyer_username ? '@' + escapeHtml(pay.buyer_username) : '<span class="muted">(unknown)</span>';
+      const amount = formatMoney(pay.currency || cachedStore.currency, pay.amount);
+
+      tr.innerHTML = `
+        <td class="muted">${escapeHtml(formatDate(pay.created_at))}</td>
+        <td>${escapeHtml(pay.product_name || '')}</td>
+        <td>${buyer}</td>
+        <td><b>${escapeHtml(amount)}</b></td>
+        <td>${paymentStatusPill(pay.status)}</td>
+        <td>
+          <button class="btn secondary smallBtn" data-act="view" data-id="${escapeAttr(pay.id)}">View</button>
+        </td>
+        <td>
+          ${
+            String(pay.status) === 'awaiting'
+              ? `
+                <button class="btn smallBtn" data-act="approve" data-id="${escapeAttr(pay.id)}">Approve</button>
+                <button class="btn danger smallBtn" data-act="reject" data-id="${escapeAttr(pay.id)}">Reject</button>
+              `
+              : `<span class="muted">—</span>`
+          }
+        </td>
+      `;
+      paymentsTbody.appendChild(tr);
+    }
+
+    paymentsTbody.querySelectorAll('button').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const act = btn.getAttribute('data-act');
+        const id = btn.getAttribute('data-id');
+        try {
+          if (act === 'view') {
+            await openProofModal(id);
+          } else if (act === 'approve') {
+            if (!confirm('Approve this payment?')) return;
+            await api(`/api/payments/${encodeURIComponent(id)}/approve`, { method: 'PUT' });
+            await loadPayments();
+            await loadOrders().catch(() => {});
+          } else if (act === 'reject') {
+            if (!confirm('Reject this payment?')) return;
+            await api(`/api/payments/${encodeURIComponent(id)}/reject`, { method: 'PUT' });
+            await loadPayments();
+            await loadOrders().catch(() => {});
+          }
+        } catch (e) {
+          alert(e.message);
+        }
+      });
+    });
+  }
+
+  function showModal() {
+    if (!proofModal) return;
+    proofModal.hidden = false;
+    document.body.style.overflow = 'hidden';
+  }
+
+  function hideModal() {
+    if (!proofModal) return;
+    proofModal.hidden = true;
+    document.body.style.overflow = '';
+    selectedPaymentId = null;
+  }
+
+  async function openProofModal(paymentId) {
+    selectedPaymentId = paymentId;
+    if (proofMeta) proofMeta.textContent = '';
+    if (proofBody) proofBody.innerHTML = `<div class="muted">Loading proof...</div>`;
+    showModal();
+
+    // Load meta
+    const out = await api(`/api/payments/${encodeURIComponent(paymentId)}`);
+    const pay = out.payment;
+    const product = out.product;
+    const order = out.order;
+
+    if (proofMeta) {
+      const buyer = pay.buyer_username ? '@' + pay.buyer_username : pay.buyer_id;
+      proofMeta.innerHTML = `
+        <div>Order: <code>${escapeHtml(pay.order_id)}</code></div>
+        <div>Buyer: ${escapeHtml(String(buyer))}</div>
+        <div>Product: ${escapeHtml(product?.name || '')}</div>
+        <div>Status: <b>${escapeHtml(pay.status)}</b></div>
+      `;
+    }
+
+    // Proof preview
+    // IMPORTANT: <img> cannot send Authorization header,
+    // so we pass token as query param (worker supports ?token=).
+    const token = getToken();
+    const proofUrl = `/api/payments/${encodeURIComponent(paymentId)}/proof?token=${encodeURIComponent(token)}`;
+
+    if (proofBody) {
+      if (String(pay.proof_type) === 'photo') {
+        proofBody.innerHTML = `
+          <img class="proofImg" src="${escapeAttr(proofUrl)}" alt="Payment proof" />
+          <div class="muted small" style="margin-top:8px;">If image doesn’t load, refresh and try again.</div>
+        `;
+      } else {
+        proofBody.innerHTML = `
+          <div class="muted">This proof was uploaded as a document.</div>
+          <div style="margin-top:10px;"><code>${escapeHtml(pay.proof_file_id || '')}</code></div>
+          <div class="muted small" style="margin-top:8px;">(Documents are harder to preview. Use Telegram or ask buyer to send as photo next time.)</div>
+        `;
+      }
+    }
+
+    // Buttons state
+    const awaiting = String(pay.status) === 'awaiting';
+    if (approvePaymentBtn) approvePaymentBtn.disabled = !awaiting;
+    if (rejectPaymentBtn) rejectPaymentBtn.disabled = !awaiting;
+  }
+
+  async function approveSelectedPayment() {
+    if (!selectedPaymentId) return;
+    await api(`/api/payments/${encodeURIComponent(selectedPaymentId)}/approve`, { method: 'PUT' });
+    await loadPayments();
+    await loadOrders().catch(() => {});
+    hideModal();
+  }
+
+  async function rejectSelectedPayment() {
+    if (!selectedPaymentId) return;
+    await api(`/api/payments/${encodeURIComponent(selectedPaymentId)}/reject`, { method: 'PUT' });
+    await loadPayments();
+    await loadOrders().catch(() => {});
+    hideModal();
   }
 
   // ---------- Load all ----------
@@ -555,10 +751,7 @@
   function wireEvents() {
     // Tabs
     tabButtons.forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const tab = btn.dataset.tab;
-        setActiveTab(tab);
-      });
+      btn.addEventListener('click', () => setActiveTab(btn.dataset.tab));
     });
 
     // Login
@@ -588,7 +781,6 @@
     if (refreshProductsBtn) {
       refreshProductsBtn.addEventListener('click', () => loadProducts().catch((e) => alert(e.message)));
     }
-
     if (productForm) {
       productForm.addEventListener('submit', (ev) => {
         ev.preventDefault();
@@ -598,7 +790,6 @@
         });
       });
     }
-
     if (clearFormBtn && productForm) {
       clearFormBtn.addEventListener('click', () => {
         productForm.reset();
@@ -622,12 +813,9 @@
     if (bankForm) {
       bankForm.addEventListener('submit', (ev) => {
         ev.preventDefault();
-        saveBankDetails().catch((e) => {
-          setBankMsg(e.message || 'Failed to save bank details', false);
-        });
+        saveBankDetails().catch((e) => setBankMsg(e.message || 'Failed', false));
       });
     }
-
     if (bankClear) {
       bankClear.addEventListener('click', () => {
         if (bankName) bankName.value = '';
@@ -636,6 +824,44 @@
         if (bankMsg) bankMsg.textContent = '';
       });
     }
+
+    // Payments
+    if (refreshPaymentsBtn) {
+      refreshPaymentsBtn.addEventListener('click', () => loadPaymentsSafe());
+    }
+    if (paymentStatusFilter) {
+      paymentStatusFilter.addEventListener('change', () => loadPaymentsSafe());
+    }
+
+    // Modal close
+    if (closeProof) closeProof.addEventListener('click', hideModal);
+    if (proofModal) {
+      proofModal.addEventListener('click', (e) => {
+        const t = e.target;
+        if (t && t.dataset && t.dataset.close === '1') hideModal();
+      });
+    }
+
+    // Modal approve/reject
+    if (approvePaymentBtn) {
+      approvePaymentBtn.addEventListener('click', async () => {
+        if (!selectedPaymentId) return;
+        if (!confirm('Approve this payment?')) return;
+        try { await approveSelectedPayment(); } catch (e) { alert(e.message); }
+      });
+    }
+    if (rejectPaymentBtn) {
+      rejectPaymentBtn.addEventListener('click', async () => {
+        if (!selectedPaymentId) return;
+        if (!confirm('Reject this payment?')) return;
+        try { await rejectSelectedPayment(); } catch (e) { alert(e.message); }
+      });
+    }
+
+    // ESC closes modal
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && proofModal && !proofModal.hidden) hideModal();
+    });
   }
 
   // ---------- Boot ----------
@@ -659,8 +885,29 @@
   }
 
   window.addEventListener('DOMContentLoaded', () => {
+    // small button style
     const style = document.createElement('style');
-    style.textContent = `.smallBtn{padding:8px 10px;font-size:12px;border-radius:10px;}`;
+    style.textContent = `
+      .smallBtn { padding: 8px 10px; font-size: 12px; border-radius: 10px; }
+      .modal { position: fixed; inset: 0; z-index: 999; display: grid; place-items: center; }
+      .modalBackdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.55); }
+      .modalCard {
+        position: relative;
+        width: min(900px, calc(100vw - 24px));
+        max-height: calc(100vh - 24px);
+        overflow: hidden;
+        border-radius: 16px;
+        border: 1px solid var(--border);
+        background: var(--card);
+        box-shadow: var(--shadow);
+        display: grid;
+        grid-template-rows: auto 1fr auto;
+      }
+      .modalHeader { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:14px 14px; border-bottom:1px solid var(--border); }
+      .modalFooter { display:flex; justify-content:flex-end; gap:10px; padding:14px; border-top:1px solid var(--border); }
+      .proofBody { padding: 14px; overflow:auto; }
+      .proofImg { width: 100%; height: auto; border-radius: 12px; border: 1px solid var(--border); background:#0f1422; }
+    `;
     document.head.appendChild(style);
 
     wireEvents();

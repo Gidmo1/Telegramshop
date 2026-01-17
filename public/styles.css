@@ -21,8 +21,7 @@ body {
   color: var(--text);
 }
 
-/* ---------------- HEADER ---------------- */
-
+/* ---------------- Header ---------------- */
 .top {
   display: flex;
   justify-content: space-between;
@@ -35,145 +34,6 @@ body {
   backdrop-filter: blur(10px);
   z-index: 50;
 }
-
-h1 { margin: 0; font-size: 18px; }
-
-.container {
-  max-width: 1100px;
-  margin: 0 auto;
-  padding: 20px;
-}
-
-/* ---------------- CARDS ---------------- */
-
-.card {
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 16px;
-  box-shadow: var(--shadow);
-}
-
-.cardHeader {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 10px;
-}
-
-/* ---------------- LAYOUT ---------------- */
-
-.grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
-  margin-bottom: 16px;
-}
-
-.grid2 {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-
-@media (max-width: 900px) {
-  .grid,
-  .grid2 {
-    grid-template-columns: 1fr;
-  }
-}
-
-.muted { color: var(--muted); }
-
-.row {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  flex-wrap: wrap;
-}
-
-/* ---------------- INPUTS ---------------- */
-
-input,
-textarea,
-select {
-  width: 100%;
-  background: #0f1422;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 10px 12px;
-  color: var(--text);
-  font-size: 14px;
-}
-
-textarea {
-  min-height: 78px;
-  resize: vertical;
-}
-
-/* ---------------- BUTTONS ---------------- */
-
-.btn {
-  border: none;
-  border-radius: 10px;
-  padding: 10px 14px;
-  cursor: pointer;
-  background: var(--accent);
-  color: white;
-  font-weight: 700;
-}
-
-.btn.secondary {
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--text);
-}
-
-.btn.danger {
-  background: var(--danger);
-}
-
-/* ---------------- TABLE ---------------- */
-
-.tableWrap {
-  width: 100%;
-  overflow-x: auto;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-}
-
-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-thead th {
-  text-align: left;
-  font-size: 12px;
-  color: var(--muted);
-  padding: 10px 8px;
-  border-bottom: 1px solid var(--border);
-}
-
-tbody td {
-  padding: 10px 8px;
-  border-bottom: 1px solid var(--border);
-  vertical-align: top;
-}
-
-/* ---------------- BADGES ---------------- */
-
-.badge {
-  display: inline-block;
-  padding: 3px 8px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  font-size: 12px;
-  color: var(--muted);
-}
-
-/* ---------------- BRAND ---------------- */
 
 .brandRow {
   display: flex;
@@ -190,15 +50,96 @@ tbody td {
   background: #0f1422;
 }
 
-/* ---------------- TABS ---------------- */
+h1 { margin: 0; font-size: 18px; }
 
+/* ---------------- Layout ---------------- */
+.container {
+  max-width: 1150px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 16px;
+  box-shadow: var(--shadow);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.grid2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+@media (max-width: 900px) {
+  .grid,
+  .grid2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+.row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.muted { color: var(--muted); }
+.small { font-size: 12px; }
+
+/* ---------------- Inputs & Buttons ---------------- */
+input, textarea, select {
+  width: 100%;
+  background: #0f1422;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  color: var(--text);
+}
+
+textarea { resize: vertical; }
+
+.btn {
+  border: none;
+  border-radius: 12px;
+  padding: 10px 14px;
+  cursor: pointer;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 700;
+}
+
+.btn.secondary {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.btn.danger {
+  background: var(--danger);
+}
+
+.smallBtn {
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+/* ---------------- Tabs ---------------- */
 .tabs {
   display: flex;
   gap: 8px;
   padding: 8px;
   border: 1px solid var(--border);
   background: rgba(18,24,38,0.6);
-  border-radius: 14px;
+  border-radius: 16px;
   margin-bottom: 16px;
   position: sticky;
   top: 74px;
@@ -207,6 +148,8 @@ tbody td {
 }
 
 .tabBtn {
+  appearance: none;
+  border: 1px solid transparent;
   background: transparent;
   color: var(--muted);
   border-radius: 12px;
@@ -214,16 +157,16 @@ tbody td {
   cursor: pointer;
   font-weight: 700;
   font-size: 13px;
-  border: 1px solid transparent;
+  transition: 120ms ease;
 }
 
 .tabBtn:hover {
-  background: rgba(255,255,255,0.04);
+  background: rgba(255,255,255,0.05);
   color: var(--text);
 }
 
 .tabBtn.active {
-  background: rgba(76,139,245,0.18);
+  background: rgba(76,139,245,0.2);
   border-color: rgba(76,139,245,0.35);
   color: var(--text);
 }
@@ -233,17 +176,52 @@ tbody td {
 }
 
 @keyframes fadeIn {
-  from { opacity: 0.75; transform: translateY(2px); }
-  to { opacity: 1; transform: translateY(0); }
+  from { opacity: 0.7; transform: translateY(2px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
-/* ---------------- KPI ---------------- */
+/* ---------------- Tables ---------------- */
+.tableWrap {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+}
 
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+thead th {
+  text-align: left;
+  font-size: 12px;
+  color: var(--muted);
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+tbody td {
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.badge {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* ---------------- KPI Cards ---------------- */
 .kpiGrid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-  margin: 12px 0;
+  gap: 12px;
+  margin: 14px 0;
 }
 
 @media (max-width: 900px) {
@@ -254,18 +232,19 @@ tbody td {
 
 .kpiCard {
   border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 12px;
+  border-radius: 16px;
+  padding: 14px;
   background: rgba(15,20,34,0.55);
 }
 
 .kpiLabel {
   font-size: 12px;
   color: var(--muted);
+  margin-bottom: 6px;
 }
 
 .kpiValue {
-  font-size: 18px;
+  font-size: 20px;
   font-weight: 800;
 }
 
@@ -282,8 +261,7 @@ tbody td {
 .deltaFlat { color: var(--muted); }
 
 .tri {
-  width: 0;
-  height: 0;
+  width: 0; height: 0;
   border-left: 6px solid transparent;
   border-right: 6px solid transparent;
 }
@@ -291,35 +269,72 @@ tbody td {
 .tri.up { border-bottom: 10px solid var(--good); }
 .tri.down { border-top: 10px solid var(--danger); }
 
-/* ---------------- CHART ---------------- */
-
+/* ---------------- Chart ---------------- */
 .chartWrap {
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: 16px;
   padding: 12px;
   background: rgba(15,20,34,0.55);
 }
 
-/* ---------------- SETTINGS / BANK ---------------- */
-
-#tab-settings form {
-  display: grid;
-  gap: 12px;
-}
-
-#tab-settings label {
+/* ---------------- Settings ---------------- */
+.storeRow {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 13px;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 0;
 }
 
-#bankMsg {
-  font-size: 13px;
-  margin-top: 4px;
+/* ---------------- Modal (Payment proof) ---------------- */
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  display: grid;
+  place-items: center;
 }
 
-code {
-  color: #c7d4ff;
-  font-size: 12px;
+.modalBackdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+}
+
+.modalCard {
+  position: relative;
+  width: min(900px, calc(100vw - 24px));
+  max-height: calc(100vh - 24px);
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  border-radius: 18px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.modalHeader,
+.modalFooter {
+  padding: 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.modalFooter {
+  border-top: 1px solid var(--border);
+  border-bottom: none;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.proofBody {
+  padding: 14px;
+  overflow: auto;
+}
+
+.proofImg {
+  width: 100%;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: #0f1422;
 }

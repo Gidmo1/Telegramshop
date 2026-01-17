@@ -48,6 +48,7 @@
         <button class="tabBtn active" data-tab="overview">Overview</button>
         <button class="tabBtn" data-tab="products">Products</button>
         <button class="tabBtn" data-tab="orders">Orders</button>
+        <button class="tabBtn" data-tab="payments">Payments</button>
         <button class="tabBtn" data-tab="settings">Settings</button>
       </nav>
 
@@ -187,6 +188,43 @@
                   <th>Buyer</th>
                   <th>Qty</th>
                   <th>Status</th>
+                  <th>Delivery</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <!-- PAYMENTS TAB -->
+      <section id="tab-payments" class="tabPanel" hidden>
+        <section class="card">
+          <div class="cardHeader">
+            <h2>Payments</h2>
+            <div class="row">
+              <select id="paymentStatusFilter" class="select">
+                <option value="" selected>All</option>
+                <option value="awaiting">Awaiting</option>
+                <option value="confirmed">Confirmed</option>
+                <option value="rejected">Rejected</option>
+              </select>
+              <button id="refreshPayments" class="btn secondary">Refresh</button>
+            </div>
+          </div>
+
+          <div id="paymentsMsg" class="muted"></div>
+
+          <div class="tableWrap">
+            <table id="paymentsTable">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Product</th>
+                  <th>Buyer</th>
+                  <th>Amount</th>
+                  <th>Status</th>
+                  <th>Proof</th>
                   <th>Actions</th>
                 </tr>
               </thead>
@@ -194,6 +232,29 @@
             </table>
           </div>
         </section>
+
+        <!-- Proof modal -->
+        <div id="proofModal" class="modal" hidden>
+          <div class="modalBackdrop" data-close="1"></div>
+          <div class="modalCard">
+            <div class="modalHeader">
+              <div>
+                <h3 style="margin:0;">Payment proof</h3>
+                <div id="proofMeta" class="muted small"></div>
+              </div>
+              <button id="closeProof" class="btn secondary">Close</button>
+            </div>
+
+            <div id="proofBody" class="proofBody">
+              <div class="muted">Loading proof...</div>
+            </div>
+
+            <div class="modalFooter">
+              <button id="approvePaymentBtn" class="btn">Approve</button>
+              <button id="rejectPaymentBtn" class="btn danger">Reject</button>
+            </div>
+          </div>
+        </div>
       </section>
 
       <!-- SETTINGS TAB -->
@@ -238,7 +299,7 @@
     </section>
   </main>
 
-  <!-- Chart.js (lightweight CDN) -->
+  <!-- Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="app.js"></script>
 </body>
