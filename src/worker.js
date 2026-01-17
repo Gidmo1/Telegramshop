@@ -148,7 +148,7 @@ function pctChange(current, previous) {
   const c = Number(current || 0);
   const p = Number(previous || 0);
   if (p === 0 && c === 0) return 0;
-  if (p === 0) return 100; // from 0 to something => +100% (simplified)
+  if (p === 0) return 100;
   return ((c - p) / p) * 100;
 }
 function asNumber(v) {
@@ -163,12 +163,6 @@ async function handleAnalytics(env, store, request) {
   const period = clampPeriod(url.searchParams.get('period'));
   const days = daysForPeriod(period);
 
-  // Current range: last N days, inclusive of today.
-  // Previous range: the N days before that.
-  //
-  // Using sqlite datetime with 'now' keeps everything in UTC. That's fine for v1.
-
-  // Orders + revenue totals (current)
   const curAgg = await dbOne(env.DB.prepare(`
     SELECT
       COUNT(*) AS orders_total,
@@ -180,7 +174,6 @@ async function handleAnalytics(env, store, request) {
       AND o.created_at >= datetime('now', ?)
   `).bind(store.id, `-${days} days`));
 
-  // Orders + revenue totals (previous)
   const prevAgg = await dbOne(env.DB.prepare(`
     SELECT
       COUNT(*) AS orders_total,
@@ -193,7 +186,6 @@ async function handleAnalytics(env, store, request) {
       AND o.created_at <  datetime('now', ?)
   `).bind(store.id, `-${days * 2} days`, `-${days} days`));
 
-  // Products count (current & previous)
   const curProducts = await dbOne(env.DB.prepare(`
     SELECT COUNT(*) AS products_total
     FROM products
@@ -209,7 +201,6 @@ async function handleAnalytics(env, store, request) {
       AND created_at <  datetime('now', ?)
   `).bind(store.id, `-${days * 2} days`, `-${days} days`));
 
-  // Chart series: daily order counts in current period
   const seriesRes = await env.DB.prepare(`
     SELECT
       strftime('%Y-%m-%d', o.created_at) AS day,
@@ -221,13 +212,10 @@ async function handleAnalytics(env, store, request) {
     ORDER BY day ASC
   `).bind(store.id, `-${days} days`).all();
 
-  // Build labels for each day in range so missing days show 0
-  // We'll generate labels in JS based on UTC date.
   const labels = [];
   const values = [];
   const map = new Map((seriesRes.results || []).map(r => [r.day, asNumber(r.count)]));
   const now = new Date();
-  // Start date: today - (days-1)
   const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
   start.setUTCDate(start.getUTCDate() - (days - 1));
 
@@ -276,7 +264,6 @@ async function handleApi(env, request) {
   const store = await authStore(env, request);
   if (!store) return json({ ok: false, error: 'unauthorized' }, { status: 401 });
 
-  // ✅ Analytics endpoint
   if (path === '/api/analytics') {
     return handleAnalytics(env, store, request);
   }
@@ -386,6 +373,17 @@ function dashboardLink(env, owner_token) {
   return `${base.replace(/\/$/, '')}/?token=${encodeURIComponent(owner_token)}`;
 }
 
+function getBotUsername(env) {
+  const raw = String(env.BOT_USERNAME || '').trim();
+  return raw.replace(/^@/, '');
+}
+
+function orderDeepLink(env, productId) {
+  const u = getBotUsername(env);
+  if (!u) return null;
+  return `https://t.me/${u}?start=order_${encodeURIComponent(productId)}`;
+}
+
 async function handleTelegram(env, request) {
   const update = await request.json().catch(() => null);
   if (!update) return json({ ok: true });
@@ -399,15 +397,38 @@ async function handleTelegram(env, request) {
     const textMsg = (message.text || '').trim();
     const photos = message.photo || null;
 
-    // Handle order quantity state FIRST (so it doesn't get swallowed)
+    // Handle order quantity state FIRST
     const stateEarly = await getState(env, userId);
     if (stateEarly?.step === 'order:qty') {
       await handleTelegramOrderQty(env, message);
       return json({ ok: true });
     }
 
+    // /start OR /start payload
     if (textMsg.startsWith('/start')) {
       await clearState(env, userId);
+
+      const parts = textMsg.split(' ');
+      const payload = (parts[1] || '').trim(); // e.g. order_<productId>
+
+      if (payload.startsWith('order_')) {
+        const productId = payload.slice('order_'.length);
+        const product = await dbOne(env.DB.prepare('SELECT * FROM products WHERE id = ?').bind(productId));
+
+        if (!product) {
+          await tgSendMessage(env, chatId, 'That product no longer exists.');
+          return json({ ok: true });
+        }
+        if (!product.in_stock) {
+          await tgSendMessage(env, chatId, 'This product is currently out of stock.');
+          return json({ ok: true });
+        }
+
+        await setState(env, userId, { step: 'order:qty', data: { product_id: productId } });
+        await tgSendMessage(env, chatId, `Ordering: <b>${product.name}</b>\n\nQuantity? (e.g. 1)`);
+        return json({ ok: true });
+      }
+
       await tgSendMessage(
         env,
         chatId,
@@ -576,7 +597,13 @@ async function handleTelegram(env, request) {
       const store = await dbOne(env.DB.prepare('SELECT * FROM stores WHERE id = ?').bind(store_id));
       if (store?.channel_id) {
         const caption = `<b>${name}</b>\nPrice: ${store.currency}${price}\n${description ? `\n${description}` : ''}`;
-        const orderBtn = kb([[{ text: 'Order', callback_data: `order:${id}` }]]);
+
+        // ✅ Use deep link so users can DM bot even if they never started it before
+        const deep = orderDeepLink(env, id);
+        const orderBtn = deep
+          ? kb([[{ text: 'Order', url: deep }]])
+          : kb([[{ text: 'Order', callback_data: `order:${id}` }]]);
+
         try {
           if (photo_file_id) {
             await tgSendPhoto(env, store.channel_id, photo_file_id, caption, orderBtn);
@@ -595,8 +622,7 @@ async function handleTelegram(env, request) {
 
   if (cb) {
     const userId = cb.from.id;
-// Always DM the user (channels can't accept replies)
-    const chatId = cb.from.id;
+    const chatId = cb.from.id; // Always DM the user
     const data = cb.data || '';
 
     try { await tgCall(env, 'answerCallbackQuery', { callback_query_id: cb.id }); } catch {}
@@ -639,6 +665,7 @@ async function handleTelegram(env, request) {
       return json({ ok: true });
     }
 
+    // Fallback: callback ordering (works only if user already started the bot before)
     const orderMatch = data.match(/^order:(.+)$/);
     if (orderMatch) {
       const productId = orderMatch[1];
@@ -651,8 +678,21 @@ async function handleTelegram(env, request) {
         await tgSendMessage(env, chatId, 'This product is currently out of stock.');
         return json({ ok: true });
       }
+
       await setState(env, userId, { step: 'order:qty', data: { product_id: productId } });
-      await tgSendMessage(env, chatId, 'Quantity? (e.g. 1)');
+
+      // Try DM; if user never started bot, show alert via callback
+      try {
+        await tgSendMessage(env, chatId, `Ordering: <b>${product.name}</b>\n\nQuantity? (e.g. 1)`);
+      } catch {
+        try {
+          await tgCall(env, 'answerCallbackQuery', {
+            callback_query_id: cb.id,
+            text: 'Open the bot and press Start first, then order again.',
+            show_alert: true,
+          });
+        } catch {}
+      }
       return json({ ok: true });
     }
 
@@ -716,6 +756,7 @@ async function debugHealth(env) {
     has: {
       TELEGRAM_BOT_TOKEN: !!env.TELEGRAM_BOT_TOKEN,
       APP_BASE_URL: !!env.APP_BASE_URL,
+      BOT_USERNAME: !!env.BOT_USERNAME,
       DB: !!env.DB,
       STATE: !!env.STATE,
     },
@@ -747,7 +788,6 @@ export default {
 
       const url = new URL(request.url);
 
-      // 🔎 Debug health endpoint
       if (url.pathname === '/debug/health') {
         const h = await debugHealth(env);
         return json(h);
@@ -764,7 +804,6 @@ export default {
 
       return notFound();
     } catch (e) {
-      // ✅ Force Cloudflare to show the real stack in logs
       console.error('WORKER_ERROR', e);
       return json(
         { ok: false, error: 'server_error', detail: String(e?.message || e) },
