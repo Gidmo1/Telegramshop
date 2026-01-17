@@ -286,6 +286,8 @@ tbody td {
 }
 
 /* ---------------- Modal (Payment proof) ---------------- */
+.modal[hidden] { display: none !important; }
+
 .modal {
   position: fixed;
   inset: 0;
@@ -298,10 +300,12 @@ tbody td {
   position: absolute;
   inset: 0;
   background: rgba(0,0,0,0.6);
+  z-index: 0;              /* ✅ behind */
 }
 
 .modalCard {
   position: relative;
+  z-index: 1;              /* ✅ above backdrop */
   width: min(900px, calc(100vw - 24px));
   max-height: calc(100vh - 24px);
   display: grid;
@@ -313,15 +317,18 @@ tbody td {
   overflow: hidden;
 }
 
-.modalHeader,
-.modalFooter {
+.modalHeader {
   padding: 14px;
   border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .modalFooter {
+  padding: 14px;
   border-top: 1px solid var(--border);
-  border-bottom: none;
   display: flex;
   justify-content: flex-end;
   gap: 10px;

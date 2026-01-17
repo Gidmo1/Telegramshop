@@ -147,6 +147,7 @@
 
   // ---------- Tabs ----------
   function setActiveTab(tabName) {
+    hideModal();
     tabButtons.forEach((b) => b.classList.toggle('active', b.dataset.tab === tabName));
     Object.entries(tabPanels).forEach(([name, el]) => {
       if (!el) return;
