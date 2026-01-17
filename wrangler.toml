@@ -7,10 +7,10 @@ directory = "public"
 
 [[d1_databases]]
 binding = "DB"
-database_name = "createyourshopbot-db"
-database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+database_name = "db"
+database_id = "b3185c5a-8143-4181-9030-8c29af6c2bc7"
 
 [[kv_namespaces]]
 binding = "STATE"
-id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
-preview_id = "REPLACE_WITH_YOUR_KV_PREVIEW_ID"
+id = "53d33d98dc004d14aae6684fc56db119"
+preview_id = "53d33d98dc004d14aae6684fc56db119"
