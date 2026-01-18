@@ -12,6 +12,9 @@
   --shadow: 0 10px 30px rgba(0,0,0,0.35);
 }
 
+/* ✅ critical: always respect the hidden attribute (fixes “modal stuck open”) */
+[hidden] { display: none !important; }
+
 * { box-sizing: border-box; }
 html, body { height: 100%; }
 

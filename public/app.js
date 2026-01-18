@@ -129,6 +129,15 @@
     return window.matchMedia("(max-width: 900px)").matches;
   }
 
+  // HARD safety: if modal exists, force it closed (prevents stuck overlay on reload)
+  function forceCloseProofModal() {
+    if (!proofModal || !proofImg) return;
+    proofModal.hidden = true;
+    proofImg.removeAttribute("src");
+    proofImg.onerror = null;
+    if (proofMeta) proofMeta.textContent = "";
+  }
+
   // ---------------- API ----------------
   async function api(path, { method = "GET", body } = {}) {
     const token = getToken();
@@ -156,12 +165,14 @@
     if (loginSection) loginSection.hidden = false;
     if (appSection) appSection.hidden = true;
     if (logoutBtn) logoutBtn.hidden = true;
+    forceCloseProofModal();
   }
 
   function showApp() {
     if (loginSection) loginSection.hidden = true;
     if (appSection) appSection.hidden = false;
     if (logoutBtn) logoutBtn.hidden = false;
+    forceCloseProofModal();
   }
 
   // ---------------- Sidebar ----------------
@@ -178,6 +189,9 @@
 
   // ---------------- Pages ----------------
   function setActivePage(name) {
+    // anytime user navigates, kill proof modal (prevents “overlay blocks everything”)
+    forceCloseProofModal();
+
     navBtns.forEach((b) => b.classList.toggle("active", b.dataset.page === name));
     Object.entries(pages).forEach(([k, el]) => {
       if (!el) return;
@@ -324,7 +338,6 @@
 
       if (kpiRevenue) kpiRevenue.textContent = String(a.revenue_total ?? "—");
       setDelta(kpiRevenueDelta, a.revenue_change_pct);
-
       if (kpiPending) kpiPending.textContent = String(a.pending_total ?? "—");
       setDelta(kpiPendingDelta, a.pending_change_pct);
 
@@ -589,6 +602,7 @@
     proofModal.hidden = true;
     proofImg.removeAttribute("src");
     proofImg.onerror = null;
+    if (proofMeta) proofMeta.textContent = "";
   }
 
   async function approvePayment(paymentId) {
@@ -883,6 +897,10 @@
 
   window.addEventListener("DOMContentLoaded", () => {
     if (backdrop) backdrop.hidden = true;
+
+    // make 100% sure overlay is never stuck on refresh
+    forceCloseProofModal();
+
     wireEvents();
     boot().catch((e) => {
       clearToken();
