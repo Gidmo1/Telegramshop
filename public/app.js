@@ -2,9 +2,6 @@
   const $ = (id) => document.getElementById(id);
   const qsa = (sel) => Array.from(document.querySelectorAll(sel));
 
-  // =========================
-  // Auth
-  // =========================
   const TOKEN_KEY = "orderlyy_token";
 
   const loginSection = $("login");
@@ -13,9 +10,6 @@
   const loginBtn = $("loginBtn");
   const logoutBtn = $("logoutBtn");
 
-  // =========================
-  // Sidebar / Navigation
-  // =========================
   const sidebar = $("sidebar");
   const hamburger = $("hamburger");
   const backdrop = $("backdrop");
@@ -29,9 +23,6 @@
     settings: $("page-settings"),
   };
 
-  // =========================
-  // Overview / Analytics
-  // =========================
   const storeInfo = $("storeInfo");
   const periodSelect = $("periodSelect");
   const analyticsMsg = $("analyticsMsg");
@@ -48,9 +39,6 @@
   const ordersChartCanvas = $("ordersChart");
   let ordersChart = null;
 
-  // =========================
-  // Products
-  // =========================
   const refreshProductsBtn = $("refreshProducts");
   const productForm = $("productForm");
   const productFormMsg = $("productFormMsg");
@@ -58,31 +46,21 @@
   const productsTable = $("productsTable");
   const productsTbody = productsTable ? productsTable.querySelector("tbody") : null;
 
-  // =========================
-  // Orders
-  // =========================
   const refreshOrdersBtn = $("refreshOrders");
   const ordersTable = $("ordersTable");
   const ordersTbody = ordersTable ? ordersTable.querySelector("tbody") : null;
 
-  // =========================
-  // Payments
-  // =========================
   const refreshPaymentsBtn = $("refreshPayments");
   const paymentStatusFilter = $("paymentStatusFilter");
   const paymentsMsg = $("paymentsMsg");
   const paymentsTable = $("paymentsTable");
   const paymentsTbody = paymentsTable ? paymentsTable.querySelector("tbody") : null;
 
-  // Modal for proof preview (optional)
   const proofModal = $("proofModal");
   const proofImg = $("proofImg");
   const proofClose = $("proofClose");
   const proofMeta = $("proofMeta");
 
-  // =========================
-  // Settings
-  // =========================
   const settingsStoreInfo = $("settingsStoreInfo");
   const bankForm = $("bankForm");
   const bankClear = $("bankClear");
@@ -92,24 +70,16 @@
   const tokenMasked = $("tokenMasked");
   const copyDashLink = $("copyDashLink");
   const copyMsg = $("copyMsg");
-
   const settingsSupportLink = $("settingsSupportLink");
 
-  // Footer subscription pill
   const subPill = $("subPill");
   const supportLinkEl = $("supportLink");
 
-  // =========================
-  // Cache
-  // =========================
   let cachedStore = null;
   let cachedProducts = [];
   let cachedOrders = [];
   let cachedPayments = [];
 
-  // =========================
-  // Token helpers
-  // =========================
   function getTokenFromUrl() {
     try {
       const url = new URL(location.href);
@@ -118,19 +88,10 @@
       return "";
     }
   }
-  function setToken(t) {
-    localStorage.setItem(TOKEN_KEY, t);
-  }
-  function getToken() {
-    return (localStorage.getItem(TOKEN_KEY) || "").trim();
-  }
-  function clearToken() {
-    localStorage.removeItem(TOKEN_KEY);
-  }
+  function setToken(t) { localStorage.setItem(TOKEN_KEY, t); }
+  function getToken() { return (localStorage.getItem(TOKEN_KEY) || "").trim(); }
+  function clearToken() { localStorage.removeItem(TOKEN_KEY); }
 
-  // =========================
-  // Utils
-  // =========================
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, (c) => ({
       "&": "&amp;",
@@ -156,9 +117,6 @@
     return window.matchMedia("(max-width: 900px)").matches;
   }
 
-  // =========================
-  // API
-  // =========================
   async function api(path, { method = "GET", body } = {}) {
     const token = getToken();
     const headers = { "content-type": "application/json" };
@@ -180,9 +138,6 @@
     return data;
   }
 
-  // =========================
-  // UI show/hide
-  // =========================
   function showLogin() {
     if (loginSection) loginSection.hidden = false;
     if (appSection) appSection.hidden = true;
@@ -195,9 +150,6 @@
     if (logoutBtn) logoutBtn.hidden = false;
   }
 
-  // =========================
-  // Sidebar (hamburger)
-  // =========================
   function openSidebar() {
     if (!sidebar || !backdrop) return;
     sidebar.classList.add("open");
@@ -209,9 +161,6 @@
     backdrop.hidden = true;
   }
 
-  // =========================
-  // Pages
-  // =========================
   function setActivePage(name) {
     navBtns.forEach((b) => b.classList.toggle("active", b.dataset.page === name));
 
@@ -222,27 +171,13 @@
 
     if (isMobile()) closeSidebar();
 
-    // Lazy page loads
-    if (name === "overview") {
-      loadAnalytics().catch(() => {});
-    }
-    if (name === "products") {
-      loadProducts().catch(() => {});
-    }
-    if (name === "orders") {
-      loadOrders().catch(() => {});
-    }
-    if (name === "payments") {
-      loadPayments().catch(() => {});
-    }
-    if (name === "settings") {
-      renderSettings();
-    }
+    if (name === "overview") loadAnalytics().catch(() => {});
+    if (name === "products") loadProducts().catch(() => {});
+    if (name === "orders") loadOrders().catch(() => {});
+    if (name === "payments") loadPayments().catch((e) => showPaymentsMsg(e));
+    if (name === "settings") renderSettings();
   }
 
-  // =========================
-  // Subscription UI
-  // =========================
   function setSubUI(store) {
     if (!store) return;
 
@@ -260,8 +195,9 @@
       subPill.textContent = `${active ? "✅" : "🔒"} ${label}${exp}`;
     }
 
-    const sup = store.support_link
-      || (store.support_username ? `https://t.me/${store.support_username}` : `https://t.me/orderlyysupport`);
+    const sup =
+      store.support_link ||
+      (store.support_username ? `https://t.me/${store.support_username}` : `https://t.me/orderlyysupport`);
 
     if (supportLinkEl) supportLinkEl.href = sup;
     if (settingsSupportLink) settingsSupportLink.href = sup;
@@ -269,15 +205,14 @@
 
   function writeBlockedMsg(e) {
     if (e && e.status === 402 && (e.message || "").includes("subscription_required")) {
-      const sup = cachedStore?.support_link || (cachedStore?.support_username ? `https://t.me/${cachedStore.support_username}` : "https://t.me/orderlyysupport");
+      const sup =
+        cachedStore?.support_link ||
+        (cachedStore?.support_username ? `https://t.me/${cachedStore.support_username}` : "https://t.me/orderlyysupport");
       return `🔒 Subscription required. Activate via support: ${sup}`;
     }
     return e?.message || "Something went wrong.";
   }
 
-  // =========================
-  // KPI triangles
-  // =========================
   function setDelta(el, pct) {
     if (!el) return;
     const n = Number(pct);
@@ -336,9 +271,6 @@
     }
   }
 
-  // =========================
-  // Load store
-  // =========================
   async function loadStore() {
     const out = await api("/api/store");
     cachedStore = out.store || null;
@@ -357,7 +289,6 @@
       `;
     }
 
-    // Settings small summary
     if (settingsStoreInfo && cachedStore) {
       settingsStoreInfo.innerHTML = `
         <div><b>Store:</b> ${escapeHtml(cachedStore.name || "")}</div>
@@ -365,14 +296,10 @@
       `;
     }
 
-    // Token section in settings
     if (tokenMasked) tokenMasked.textContent = maskToken(getToken());
     return cachedStore;
   }
 
-  // =========================
-  // Analytics
-  // =========================
   async function loadAnalytics() {
     if (!cachedStore) return;
 
@@ -400,7 +327,6 @@
       if (analyticsMsg) analyticsMsg.textContent = "";
     } catch (e) {
       if (analyticsMsg) analyticsMsg.textContent = e.message || "Analytics unavailable.";
-      // fallback (still show something)
       if (kpiOrders) kpiOrders.textContent = String(cachedOrders.length || 0);
       setDelta(kpiOrdersDelta, NaN);
       if (kpiProducts) kpiProducts.textContent = String(cachedProducts.length || 0);
@@ -412,9 +338,6 @@
     }
   }
 
-  // =========================
-  // Products
-  // =========================
   async function loadProducts() {
     const out = await api("/api/products");
     cachedProducts = out.products || [];
@@ -519,9 +442,6 @@
     await loadAnalytics();
   }
 
-  // =========================
-  // Orders
-  // =========================
   async function loadOrders() {
     const out = await api("/api/orders");
     cachedOrders = out.orders || [];
@@ -560,9 +480,6 @@
     });
   }
 
-  // =========================
-  // Payments
-  // =========================
   function showPaymentsMsg(e) {
     if (!paymentsMsg) return;
     paymentsMsg.textContent = e ? writeBlockedMsg(e) : "";
@@ -627,10 +544,12 @@
     proofImg.src = "";
     proofModal.hidden = false;
 
-    const url = `/api/payments/${encodeURIComponent(paymentId)}/proof`;
+    // ✅ IMPORTANT FIX: add ?token=... because <img> does not send Authorization header
+    const token = getToken();
+    const url = `/api/payments/${encodeURIComponent(paymentId)}/proof?token=${encodeURIComponent(token)}`;
     proofImg.src = url;
 
-    const p = cachedPayments.find(x => x.id === paymentId);
+    const p = cachedPayments.find((x) => x.id === paymentId);
     if (proofMeta) {
       proofMeta.innerHTML = p
         ? `Order: <code>${escapeHtml(p.order_id || "")}</code> · Buyer: <b>${escapeHtml(p.buyer_username ? "@"+p.buyer_username : (p.buyer_id || ""))}</b>`
@@ -652,9 +571,6 @@
     await api(`/api/payments/${encodeURIComponent(paymentId)}/reject`, { method: "PUT" });
   }
 
-  // =========================
-  // Settings
-  // =========================
   function renderSettings() {
     if (!cachedStore) return;
 
@@ -686,7 +602,6 @@
       `;
     }
 
-    // bank form prefill (if fields exist)
     if (bankForm) {
       const bank = bankForm.querySelector('input[name="bank_name"]');
       const acct = bankForm.querySelector('input[name="account_number"]');
@@ -721,7 +636,7 @@
         body: { bank_name, account_number, account_name },
       });
       bankMsg.textContent = "Saved ✅";
-      await loadStore(); // refresh store
+      await loadStore();
       renderSettings();
     } catch (e) {
       bankMsg.textContent = writeBlockedMsg(e);
@@ -748,9 +663,6 @@
     }
   }
 
-  // =========================
-  // Load all core data
-  // =========================
   async function loadAllCore() {
     await loadStore();
     await Promise.all([
@@ -760,9 +672,6 @@
     await loadAnalytics().catch(() => {});
   }
 
-  // =========================
-  // Login
-  // =========================
   async function doLogin(token) {
     if (!token) throw new Error("Missing token");
     setToken(token);
@@ -771,20 +680,14 @@
     setActivePage("overview");
   }
 
-  // =========================
-  // Wiring
-  // =========================
   function wireEvents() {
-    // Hamburger
     if (hamburger) hamburger.addEventListener("click", openSidebar);
     if (backdrop) backdrop.addEventListener("click", closeSidebar);
 
-    // Nav
     navBtns.forEach((btn) => {
       btn.addEventListener("click", () => setActivePage(btn.dataset.page));
     });
 
-    // Login
     if (loginBtn) {
       loginBtn.addEventListener("click", async () => {
         const t = tokenInput ? tokenInput.value.trim() : "";
@@ -799,7 +702,6 @@
       });
     }
 
-    // Logout
     if (logoutBtn) {
       logoutBtn.addEventListener("click", () => {
         clearToken();
@@ -807,17 +709,14 @@
       });
     }
 
-    // Overview period
     if (periodSelect) {
       periodSelect.addEventListener("change", () => loadAnalytics().catch(() => {}));
     }
 
-    // Products refresh
     if (refreshProductsBtn) {
       refreshProductsBtn.addEventListener("click", () => loadProducts().catch((e) => alert(e.message)));
     }
 
-    // Products table actions (delegation)
     if (productsTbody) {
       productsTbody.addEventListener("click", async (ev) => {
         const btn = ev.target.closest("button");
@@ -843,7 +742,6 @@
       });
     }
 
-    // Product form submit
     if (productForm) {
       productForm.addEventListener("submit", async (ev) => {
         ev.preventDefault();
@@ -856,7 +754,6 @@
       });
     }
 
-    // Product form clear
     if (clearProductFormBtn && productForm) {
       clearProductFormBtn.addEventListener("click", () => {
         productForm.reset();
@@ -866,12 +763,10 @@
       });
     }
 
-    // Orders refresh
     if (refreshOrdersBtn) {
       refreshOrdersBtn.addEventListener("click", () => loadOrders().catch((e) => alert(e.message)));
     }
 
-    // Orders actions (delegation)
     if (ordersTbody) {
       ordersTbody.addEventListener("click", async (ev) => {
         const btn = ev.target.closest("button");
@@ -891,7 +786,6 @@
       });
     }
 
-    // Payments refresh
     if (refreshPaymentsBtn) {
       refreshPaymentsBtn.addEventListener("click", () => loadPayments().catch((e) => showPaymentsMsg(e)));
     }
@@ -899,7 +793,6 @@
       paymentStatusFilter.addEventListener("change", () => loadPayments().catch((e) => showPaymentsMsg(e)));
     }
 
-    // Payments actions (delegation)
     if (paymentsTbody) {
       paymentsTbody.addEventListener("click", async (ev) => {
         const btn = ev.target.closest("button");
@@ -933,7 +826,6 @@
       });
     }
 
-    // Proof modal close
     if (proofClose) proofClose.addEventListener("click", closeProofModal);
     if (proofModal) {
       proofModal.addEventListener("click", (e) => {
@@ -941,7 +833,6 @@
       });
     }
 
-    // Settings: bank save
     if (bankForm) {
       bankForm.addEventListener("submit", (ev) => {
         ev.preventDefault();
@@ -951,7 +842,6 @@
       });
     }
 
-    // Settings: bank clear
     if (bankClear && bankForm) {
       bankClear.addEventListener("click", () => {
         bankForm.reset();
@@ -959,15 +849,11 @@
       });
     }
 
-    // Settings: copy dashboard link
     if (copyDashLink) {
       copyDashLink.addEventListener("click", () => copyDashboardLink());
     }
   }
 
-  // =========================
-  // Boot
-  // =========================
   async function boot() {
     const urlToken = getTokenFromUrl();
     const existing = getToken();
@@ -988,9 +874,7 @@
   }
 
   window.addEventListener("DOMContentLoaded", () => {
-    // Safety: if backdrop exists but no sidebar, keep it hidden
     if (backdrop) backdrop.hidden = true;
-
     wireEvents();
     boot().catch((e) => {
       clearToken();
