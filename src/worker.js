@@ -316,27 +316,59 @@ async function handleAnalytics(env, store, request) {
   const days = daysForPeriod(period);
 
   const curAgg = await dbOne(env.DB.prepare(`
-    SELECT
-      COUNT(*) AS orders_total,
-      COALESCE(SUM(p.price * o.qty), 0) AS revenue_total,
-      SUM(CASE WHEN o.status = 'pending' THEN 1 ELSE 0 END) AS pending_total
-    FROM orders o
-    LEFT JOIN products p ON p.id = o.product_id
-    WHERE o.store_id = ?
-      AND o.created_at >= datetime('now', ?)
-  `).bind(store.id, `-${days} days`));
+  SELECT
+    (SELECT COUNT(*)
+     FROM orders o
+     WHERE o.store_id = ?
+       AND o.created_at >= datetime('now', ?)
+    ) AS orders_total,
+
+    (SELECT COALESCE(SUM(pay.amount), 0)
+     FROM payments pay
+     WHERE pay.store_id = ?
+       AND pay.status = 'confirmed'
+       AND pay.created_at >= datetime('now', ?)
+    ) AS revenue_total,
+
+    (SELECT SUM(CASE WHEN o.status = 'pending' THEN 1 ELSE 0 END)
+     FROM orders o
+     WHERE o.store_id = ?
+       AND o.created_at >= datetime('now', ?)
+    ) AS pending_total
+`).bind(
+  store.id, `-${days} days`,
+  store.id, `-${days} days`,
+  store.id, `-${days} days`
+));
 
   const prevAgg = await dbOne(env.DB.prepare(`
-    SELECT
-      COUNT(*) AS orders_total,
-      COALESCE(SUM(p.price * o.qty), 0) AS revenue_total,
-      SUM(CASE WHEN o.status = 'pending' THEN 1 ELSE 0 END) AS pending_total
-    FROM orders o
-    LEFT JOIN products p ON p.id = o.product_id
-    WHERE o.store_id = ?
-      AND o.created_at >= datetime('now', ?)
-      AND o.created_at <  datetime('now', ?)
-  `).bind(store.id, `-${days * 2} days`, `-${days} days`));
+  SELECT
+    (SELECT COUNT(*)
+     FROM orders o
+     WHERE o.store_id = ?
+       AND o.created_at >= datetime('now', ?)
+       AND o.created_at <  datetime('now', ?)
+    ) AS orders_total,
+
+    (SELECT COALESCE(SUM(pay.amount), 0)
+     FROM payments pay
+     WHERE pay.store_id = ?
+       AND pay.status = 'confirmed'
+       AND pay.created_at >= datetime('now', ?)
+       AND pay.created_at <  datetime('now', ?)
+    ) AS revenue_total,
+
+    (SELECT SUM(CASE WHEN o.status = 'pending' THEN 1 ELSE 0 END)
+     FROM orders o
+     WHERE o.store_id = ?
+       AND o.created_at >= datetime('now', ?)
+       AND o.created_at <  datetime('now', ?)
+    ) AS pending_total
+`).bind(
+  store.id, `-${days * 2} days`, `-${days} days`,
+  store.id, `-${days * 2} days`, `-${days} days`,
+  store.id, `-${days * 2} days`, `-${days} days`
+));
 
   const curProducts = await dbOne(env.DB.prepare(`
     SELECT COUNT(*) AS products_total
