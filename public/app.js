@@ -1,30 +1,37 @@
-/* app.js (Orderlyy Dashboard) */
 (() => {
   const $ = (id) => document.getElementById(id);
+  const qsa = (sel) => Array.from(document.querySelectorAll(sel));
 
-  // Sections
+  // =========================
+  // Auth
+  // =========================
+  const TOKEN_KEY = "orderlyy_token";
+
   const loginSection = $("login");
   const appSection = $("app");
-
-  // Auth
   const tokenInput = $("tokenInput");
   const loginBtn = $("loginBtn");
   const logoutBtn = $("logoutBtn");
 
-  // Sidebar nav + panels
-  const navButtons = Array.from(document.querySelectorAll(".navBtn"));
-  const panels = {
-    overview: $("panel-overview"),
-    products: $("panel-products"),
-    orders: $("panel-orders"),
-    payments: $("panel-payments"),
-    settings: $("panel-settings"),
+  // =========================
+  // Sidebar / Navigation
+  // =========================
+  const sidebar = $("sidebar");
+  const hamburger = $("hamburger");
+  const backdrop = $("backdrop");
+  const navBtns = qsa(".navBtn");
+
+  const pages = {
+    overview: $("page-overview"),
+    products: $("page-products"),
+    orders: $("page-orders"),
+    payments: $("page-payments"),
+    settings: $("page-settings"),
   };
 
-  // Header store subtitle
-  const storeSubtitle = $("storeSubtitle");
-
+  // =========================
   // Overview / Analytics
+  // =========================
   const storeInfo = $("storeInfo");
   const periodSelect = $("periodSelect");
   const analyticsMsg = $("analyticsMsg");
@@ -41,57 +48,68 @@
   const ordersChartCanvas = $("ordersChart");
   let ordersChart = null;
 
+  // =========================
   // Products
+  // =========================
   const refreshProductsBtn = $("refreshProducts");
   const productForm = $("productForm");
-  const clearFormBtn = $("clearForm");
   const productFormMsg = $("productFormMsg");
+  const clearProductFormBtn = $("clearProductForm");
   const productsTable = $("productsTable");
   const productsTbody = productsTable ? productsTable.querySelector("tbody") : null;
 
+  // =========================
   // Orders
+  // =========================
   const refreshOrdersBtn = $("refreshOrders");
   const ordersTable = $("ordersTable");
   const ordersTbody = ordersTable ? ordersTable.querySelector("tbody") : null;
 
+  // =========================
   // Payments
+  // =========================
   const refreshPaymentsBtn = $("refreshPayments");
-  const paymentsStatus = $("paymentsStatus");
+  const paymentStatusFilter = $("paymentStatusFilter");
   const paymentsMsg = $("paymentsMsg");
   const paymentsTable = $("paymentsTable");
   const paymentsTbody = paymentsTable ? paymentsTable.querySelector("tbody") : null;
 
-  // Payment modal
-  const payModal = $("payModal");
-  const payModalBackdrop = $("payModalBackdrop");
-  const payModalClose = $("payModalClose");
-  const payModalTitle = $("payModalTitle");
-  const payModalMeta = $("payModalMeta");
-  const payModalProof = $("payModalProof");
-  const payModalActions = $("payModalActions");
+  // Modal for proof preview (optional)
+  const proofModal = $("proofModal");
+  const proofImg = $("proofImg");
+  const proofClose = $("proofClose");
+  const proofMeta = $("proofMeta");
 
-  // Settings (Bank)
+  // =========================
+  // Settings
+  // =========================
+  const settingsStoreInfo = $("settingsStoreInfo");
   const bankForm = $("bankForm");
+  const bankClear = $("bankClear");
   const bankMsg = $("bankMsg");
-  const bankName = $("bank_name");
-  const accountNumber = $("account_number");
-  const accountName = $("account_name");
 
-  // Subscription
-  const subBadge = $("subBadge");
-  const subText = $("subText");
-  const subContact = $("subContact");
+  const planBox = $("planBox");
+  const tokenMasked = $("tokenMasked");
+  const copyDashLink = $("copyDashLink");
+  const copyMsg = $("copyMsg");
 
-  // Token storage
-  const TOKEN_KEY = "orderlyy_token";
+  const settingsSupportLink = $("settingsSupportLink");
 
+  // Footer subscription pill
+  const subPill = $("subPill");
+  const supportLinkEl = $("supportLink");
+
+  // =========================
   // Cache
+  // =========================
   let cachedStore = null;
   let cachedProducts = [];
   let cachedOrders = [];
   let cachedPayments = [];
 
-  // ---------- Token helpers ----------
+  // =========================
+  // Token helpers
+  // =========================
   function getTokenFromUrl() {
     try {
       const url = new URL(location.href);
@@ -100,8 +118,8 @@
       return "";
     }
   }
-  function setToken(token) {
-    localStorage.setItem(TOKEN_KEY, token);
+  function setToken(t) {
+    localStorage.setItem(TOKEN_KEY, t);
   }
   function getToken() {
     return (localStorage.getItem(TOKEN_KEY) || "").trim();
@@ -109,35 +127,10 @@
   function clearToken() {
     localStorage.removeItem(TOKEN_KEY);
   }
-  function setInputValueSafe(el, value) {
-    if (!el) return;
-    el.value = value;
-  }
 
-  // ---------- API ----------
-  async function api(path, { method = "GET", body } = {}) {
-    const token = getToken();
-    const headers = { "content-type": "application/json" };
-    if (token) headers["authorization"] = `Bearer ${token}`;
-
-    const res = await fetch(path, {
-      method,
-      headers,
-      body: body ? JSON.stringify(body) : undefined,
-    });
-
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok || data.ok === false) {
-      const msg = data.error || `HTTP ${res.status}`;
-      const err = new Error(msg);
-      err.httpStatus = res.status;
-      err.payload = data;
-      throw err;
-    }
-    return data;
-  }
-
-  // ---------- Formatting ----------
+  // =========================
+  // Utils
+  // =========================
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, (c) => ({
       "&": "&amp;",
@@ -148,550 +141,154 @@
     }[c]));
   }
 
-  function formatMoney(currency, value) {
-    if (value === null || value === undefined) return "—";
-    const cur = currency || "";
-    return `${cur}${value}`;
+  function formatMoney(cur, v) {
+    if (cur == null) return String(v);
+    return `${cur}${v}`;
   }
 
-  function formatDateTime(s) {
-    if (!s) return "—";
-    const d = new Date(s);
-    if (Number.isNaN(d.getTime())) return escapeHtml(String(s));
-    return d.toLocaleString();
+  function maskToken(t) {
+    const token = String(t || "");
+    if (token.length <= 10) return token;
+    return `${token.slice(0, 6)}…${token.slice(-4)}`;
   }
 
-  // ---------- Navigation (left sidebar) ----------
-  function setActivePanel(name) {
-    navButtons.forEach((b) => {
-      b.classList.toggle("active", b.dataset.nav === name);
+  function isMobile() {
+    return window.matchMedia("(max-width: 900px)").matches;
+  }
+
+  // =========================
+  // API
+  // =========================
+  async function api(path, { method = "GET", body } = {}) {
+    const token = getToken();
+    const headers = { "content-type": "application/json" };
+    if (token) headers.authorization = `Bearer ${token}`;
+
+    const res = await fetch(path, {
+      method,
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
     });
-    Object.entries(panels).forEach(([key, el]) => {
-      if (!el) return;
-      el.hidden = key !== name;
-    });
-    // update URL hash (nice UX)
-    try {
-      history.replaceState(null, "", `#${name}`);
-    } catch {}
+
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.ok === false) {
+      const err = new Error(data.error || `HTTP ${res.status}`);
+      err.status = res.status;
+      err.data = data;
+      throw err;
+    }
+    return data;
   }
 
-  function getInitialPanel() {
-    const h = (location.hash || "").replace("#", "").trim();
-    if (h && panels[h]) return h;
-    return "overview";
-  }
-
-  // ---------- UI show/hide ----------
-  function showApp() {
-    if (loginSection) loginSection.hidden = true;
-    if (appSection) appSection.hidden = false;
-    if (logoutBtn) logoutBtn.hidden = false;
-  }
+  // =========================
+  // UI show/hide
+  // =========================
   function showLogin() {
     if (loginSection) loginSection.hidden = false;
     if (appSection) appSection.hidden = true;
     if (logoutBtn) logoutBtn.hidden = true;
   }
 
-  // ---------- Subscription UX ----------
-  function renderSubscription(store) {
+  function showApp() {
+    if (loginSection) loginSection.hidden = true;
+    if (appSection) appSection.hidden = false;
+    if (logoutBtn) logoutBtn.hidden = false;
+  }
+
+  // =========================
+  // Sidebar (hamburger)
+  // =========================
+  function openSidebar() {
+    if (!sidebar || !backdrop) return;
+    sidebar.classList.add("open");
+    backdrop.hidden = false;
+  }
+  function closeSidebar() {
+    if (!sidebar || !backdrop) return;
+    sidebar.classList.remove("open");
+    backdrop.hidden = true;
+  }
+
+  // =========================
+  // Pages
+  // =========================
+  function setActivePage(name) {
+    navBtns.forEach((b) => b.classList.toggle("active", b.dataset.page === name));
+
+    Object.entries(pages).forEach(([k, el]) => {
+      if (!el) return;
+      el.hidden = k !== name;
+    });
+
+    if (isMobile()) closeSidebar();
+
+    // Lazy page loads
+    if (name === "overview") {
+      loadAnalytics().catch(() => {});
+    }
+    if (name === "products") {
+      loadProducts().catch(() => {});
+    }
+    if (name === "orders") {
+      loadOrders().catch(() => {});
+    }
+    if (name === "payments") {
+      loadPayments().catch(() => {});
+    }
+    if (name === "settings") {
+      renderSettings();
+    }
+  }
+
+  // =========================
+  // Subscription UI
+  // =========================
+  function setSubUI(store) {
     if (!store) return;
 
     const active = !!store.subscription_active;
-    const status = String(store.subscription_status || "unknown");
-    const exp = store.subscription_expires_at || "";
-    const supportUser = store.support_username || "orderlyysupport";
-    const supportLink = store.support_link || `https://t.me/${supportUser}`;
+    const status = String(store.subscription_status || "unknown").toLowerCase();
+    const exp = store.subscription_expires_at ? ` · exp ${store.subscription_expires_at}` : "";
 
-    if (subBadge) {
-      subBadge.className = active ? "pill ok" : "pill bad";
-      subBadge.textContent = active ? "Active" : "Expired";
+    if (subPill) {
+      const label =
+        status === "trial" ? "Trial" :
+        status === "active" ? "Active" :
+        status === "expired" ? "Expired" :
+        status;
+
+      subPill.textContent = `${active ? "✅" : "🔒"} ${label}${exp}`;
     }
 
-    if (subText) {
-      const expTxt = exp ? formatDateTime(exp) : "—";
-      subText.innerHTML = `
-        <div><b>Plan:</b> ${escapeHtml(status)}</div>
-        <div><b>Expiry:</b> ${escapeHtml(expTxt)}</div>
-        <div class="muted small">Activation is handled by support for now.</div>
-      `;
-    }
+    const sup = store.support_link
+      || (store.support_username ? `https://t.me/${store.support_username}` : `https://t.me/orderlyysupport`);
 
-    if (subContact) {
-      subContact.href = supportLink;
-      subContact.textContent = `@${supportUser}`;
-    }
+    if (supportLinkEl) supportLinkEl.href = sup;
+    if (settingsSupportLink) settingsSupportLink.href = sup;
   }
 
-  function renderWriteLockMessage(err) {
-    // Worker returns 402 for subscription_required (we used that)
-    if (!err) return "";
-    const is402 = err.httpStatus === 402;
-    if (!is402) return "";
-    const support = cachedStore?.support_username ? `@${cachedStore.support_username}` : "@orderlyysupport";
-    return `🔒 Subscription required. Message ${support} to activate.`;
-  }
-
-  // ---------- Store ----------
-  async function loadStore() {
-    const out = await api("/api/store");
-    cachedStore = out.store;
-
-    if (storeSubtitle && cachedStore?.name) {
-      storeSubtitle.innerHTML = `Managing <b>${escapeHtml(cachedStore.name)}</b> — keep your token private.`;
+  function writeBlockedMsg(e) {
+    if (e && e.status === 402 && (e.message || "").includes("subscription_required")) {
+      const sup = cachedStore?.support_link || (cachedStore?.support_username ? `https://t.me/${cachedStore.support_username}` : "https://t.me/orderlyysupport");
+      return `🔒 Subscription required. Activate via support: ${sup}`;
     }
-
-    renderSubscription(cachedStore);
-
-    // Fill store info (overview)
-    if (storeInfo) {
-      const channel = cachedStore.channel_username
-        ? "@" + escapeHtml(cachedStore.channel_username)
-        : (cachedStore.channel_id ? escapeHtml(cachedStore.channel_id) : '<span class="muted">Not linked</span>');
-
-      storeInfo.innerHTML = `
-        <div class="infoGrid">
-          <div><div class="muted small">Store name</div><div><b>${escapeHtml(cachedStore.name || "")}</b></div></div>
-          <div><div class="muted small">Currency</div><div><b>${escapeHtml(cachedStore.currency || "")}</b></div></div>
-          <div><div class="muted small">Channel</div><div>${channel}</div></div>
-          <div><div class="muted small">Delivery note</div><div>${escapeHtml(cachedStore.delivery_note || "")}</div></div>
-        </div>
-      `;
-    }
-
-    // Pre-fill settings bank form
-    if (bankName) bankName.value = cachedStore.bank_name || "";
-    if (accountNumber) accountNumber.value = cachedStore.account_number || "";
-    if (accountName) accountName.value = cachedStore.account_name || "";
-
-    return cachedStore;
+    return e?.message || "Something went wrong.";
   }
 
-  // ---------- Products ----------
-  async function loadProducts() {
-    const out = await api("/api/products");
-    cachedProducts = out.products || [];
-    renderProducts();
-    return cachedProducts;
-  }
-
-  function renderProducts() {
-    if (!productsTbody || !cachedStore) return;
-    productsTbody.innerHTML = "";
-
-    for (const p of cachedProducts) {
-      const tr = document.createElement("tr");
-      tr.innerHTML = `
-        <td>
-          <div class="cellMain">${escapeHtml(p.name)}</div>
-          <div class="muted small">${p.description ? escapeHtml(p.description) : ""}</div>
-        </td>
-        <td><b>${escapeHtml(formatMoney(cachedStore.currency, p.price))}</b></td>
-        <td>${p.in_stock ? '<span class="pill ok">In stock</span>' : '<span class="pill bad">Out</span>'}</td>
-        <td class="muted">${p.photo_file_id ? `<code>${escapeHtml(p.photo_file_id)}</code>` : ""}</td>
-        <td class="rowActions">
-          <button class="btn secondary tiny" data-act="toggle" data-id="${escapeHtml(p.id)}">Toggle</button>
-          <button class="btn secondary tiny" data-act="edit" data-id="${escapeHtml(p.id)}">Edit</button>
-        </td>
-      `;
-      productsTbody.appendChild(tr);
-    }
-
-    productsTbody.querySelectorAll("button").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const act = btn.getAttribute("data-act");
-        const id = btn.getAttribute("data-id");
-        try {
-          if (act === "toggle") {
-            await toggleStock(id);
-            await loadProducts();
-            await loadAnalyticsSafe();
-          } else if (act === "edit") {
-            await editProduct(id);
-            await loadProducts();
-            await loadAnalyticsSafe();
-          }
-        } catch (e) {
-          alert(e.message || "Failed");
-        }
-      });
-    });
-  }
-
-  async function toggleStock(id) {
-    const product = cachedProducts.find((p) => p.id === id);
-    if (!product) throw new Error("Product not found");
-
-    const newStock = product.in_stock ? 0 : 1;
-    await api(`/api/products/${encodeURIComponent(id)}`, {
-      method: "PUT",
-      body: {
-        name: product.name,
-        price: product.price,
-        description: product.description || "",
-        in_stock: newStock,
-        photo_file_id: product.photo_file_id || null,
-      },
-    });
-  }
-
-  async function editProduct(id) {
-    const product = cachedProducts.find((p) => p.id === id);
-    if (!product) throw new Error("Product not found");
-
-    const name = prompt("Product name", product.name);
-    if (name === null) return;
-
-    const priceStr = prompt("Price (number)", String(product.price));
-    if (priceStr === null) return;
-    const price = Number(priceStr);
-    if (!Number.isFinite(price) || price < 0) throw new Error("Invalid price");
-
-    const description = prompt("Description", product.description || "") ?? "";
-    const inStock = confirm("In stock? (OK=yes, Cancel=no)") ? 1 : 0;
-    const photo_file_id = prompt("Photo file_id (optional)", product.photo_file_id || "") ?? "";
-
-    await api(`/api/products/${encodeURIComponent(id)}`, {
-      method: "PUT",
-      body: {
-        name: name.trim(),
-        price,
-        description,
-        in_stock: inStock,
-        photo_file_id: photo_file_id.trim() || null,
-      },
-    });
-  }
-
-  async function addProductFromForm() {
-    if (!productForm) return;
-    if (productFormMsg) productFormMsg.textContent = "";
-
-    const fd = new FormData(productForm);
-    const name = String(fd.get("name") || "").trim();
-    const price = Number(fd.get("price") || 0);
-    const description = String(fd.get("description") || "").trim();
-    const in_stock = String(fd.get("in_stock") || "1") === "1" ? 1 : 0;
-    const photo_file_id = String(fd.get("photo_file_id") || "").trim() || null;
-
-    if (!name || !Number.isFinite(price)) {
-      if (productFormMsg) productFormMsg.textContent = "Name + numeric price are required.";
-      return;
-    }
-
-    try {
-      await api("/api/products", { method: "POST", body: { name, price, description, in_stock, photo_file_id } });
-      productForm.reset();
-      const stockSel = productForm.querySelector('select[name="in_stock"]');
-      if (stockSel) stockSel.value = "1";
-      if (productFormMsg) productFormMsg.textContent = "Product added ✅";
-      await loadProducts();
-      await loadAnalyticsSafe();
-    } catch (e) {
-      const lock = renderWriteLockMessage(e);
-      if (productFormMsg) productFormMsg.textContent = lock || `Error: ${e.message}`;
-      throw e;
-    }
-  }
-
-  // ---------- Orders ----------
-  async function loadOrders() {
-    const out = await api("/api/orders");
-    cachedOrders = out.orders || [];
-    renderOrders();
-    return cachedOrders;
-  }
-
-  function renderOrders() {
-    if (!ordersTbody) return;
-    ordersTbody.innerHTML = "";
-
-    for (const o of cachedOrders) {
-      const buyer = o.buyer_username ? "@" + escapeHtml(o.buyer_username) : '<span class="muted">(unknown)</span>';
-      const delivery = o.delivery_text ? escapeHtml(o.delivery_text) : '<span class="muted">—</span>';
-
-      const tr = document.createElement("tr");
-      tr.innerHTML = `
-        <td><code>${escapeHtml(o.id)}</code></td>
-        <td>${escapeHtml(o.product_name || "")}</td>
-        <td>${buyer}</td>
-        <td><b>${escapeHtml(String(o.qty))}</b></td>
-        <td><span class="pill ${o.status === "pending" ? "warn" : "soft"}">${escapeHtml(o.status || "")}</span></td>
-        <td class="muted small">${delivery}</td>
-        <td class="rowActions">
-          <button class="btn secondary tiny" data-act="done" data-id="${escapeHtml(o.id)}">Done</button>
-          <button class="btn secondary tiny" data-act="pending" data-id="${escapeHtml(o.id)}">Pending</button>
-        </td>
-      `;
-      ordersTbody.appendChild(tr);
-    }
-
-    ordersTbody.querySelectorAll("button").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const act = btn.getAttribute("data-act");
-        const id = btn.getAttribute("data-id");
-        try {
-          const status = act === "done" ? "done" : "pending";
-          await api(`/api/orders/${encodeURIComponent(id)}/status`, { method: "PUT", body: { status } });
-          await loadOrders();
-          await loadAnalyticsSafe();
-        } catch (e) {
-          alert(renderWriteLockMessage(e) || e.message);
-        }
-      });
-    });
-  }
-
-  // ---------- Payments ----------
-  async function loadPayments() {
-    if (paymentsMsg) paymentsMsg.textContent = "";
-    const status = paymentsStatus ? paymentsStatus.value : "";
-    const qs = status ? `?status=${encodeURIComponent(status)}` : "";
-    const out = await api(`/api/payments${qs}`);
-    cachedPayments = out.payments || [];
-    renderPayments();
-    return cachedPayments;
-  }
-
-  function statusPill(status) {
-    const s = String(status || "");
-    if (s === "awaiting") return '<span class="pill warn">awaiting</span>';
-    if (s === "confirmed") return '<span class="pill ok">confirmed</span>';
-    if (s === "rejected") return '<span class="pill bad">rejected</span>';
-    return `<span class="pill soft">${escapeHtml(s)}</span>`;
-  }
-
-  function renderPayments() {
-    if (!paymentsTbody || !cachedStore) return;
-    paymentsTbody.innerHTML = "";
-
-    if (!cachedPayments.length) {
-      const tr = document.createElement("tr");
-      tr.innerHTML = `<td colspan="7" class="muted" style="padding:14px;">No payments yet.</td>`;
-      paymentsTbody.appendChild(tr);
-      return;
-    }
-
-    for (const p of cachedPayments) {
-      const buyer = p.buyer_username ? "@" + escapeHtml(p.buyer_username) : '<span class="muted">(unknown)</span>';
-      const amount = formatMoney(p.currency || cachedStore.currency, p.amount);
-      const tr = document.createElement("tr");
-      tr.innerHTML = `
-        <td><code>${escapeHtml(p.id)}</code></td>
-        <td><code>${escapeHtml(p.order_id)}</code></td>
-        <td>${escapeHtml(p.product_name || "")}</td>
-        <td>${buyer}</td>
-        <td><b>${escapeHtml(amount)}</b></td>
-        <td>${statusPill(p.status)}</td>
-        <td class="rowActions">
-          <button class="btn secondary tiny" data-act="view" data-id="${escapeHtml(p.id)}">View</button>
-          <button class="btn tiny" data-act="approve" data-id="${escapeHtml(p.id)}" ${p.status !== "awaiting" ? "disabled" : ""}>Approve</button>
-          <button class="btn danger tiny" data-act="reject" data-id="${escapeHtml(p.id)}" ${p.status !== "awaiting" ? "disabled" : ""}>Reject</button>
-        </td>
-      `;
-      paymentsTbody.appendChild(tr);
-    }
-
-    paymentsTbody.querySelectorAll("button").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const act = btn.getAttribute("data-act");
-        const id = btn.getAttribute("data-id");
-        try {
-          if (act === "view") {
-            await openPaymentModal(id);
-            return;
-          }
-          if (act === "approve") {
-            if (!confirm("Approve this payment?")) return;
-            await api(`/api/payments/${encodeURIComponent(id)}/approve`, { method: "PUT" });
-            await Promise.all([loadPayments(), loadOrders(), loadAnalyticsSafe()]);
-            return;
-          }
-          if (act === "reject") {
-            if (!confirm("Reject this payment?")) return;
-            await api(`/api/payments/${encodeURIComponent(id)}/reject`, { method: "PUT" });
-            await Promise.all([loadPayments(), loadOrders(), loadAnalyticsSafe()]);
-            return;
-          }
-        } catch (e) {
-          const msg = renderWriteLockMessage(e) || e.message;
-          if (paymentsMsg) paymentsMsg.textContent = msg;
-          alert(msg);
-        }
-      });
-    });
-  }
-
-  async function openPaymentModal(paymentId) {
-    if (!payModal) return;
-
-    // Reset
-    if (payModalTitle) payModalTitle.textContent = "Payment";
-    if (payModalMeta) payModalMeta.innerHTML = "";
-    if (payModalProof) payModalProof.innerHTML = "";
-    if (payModalActions) payModalActions.innerHTML = "";
-
-    // Show now (fast)
-    showPayModal(true);
-
-    let details = null;
-    try {
-      details = await api(`/api/payments/${encodeURIComponent(paymentId)}`);
-    } catch (e) {
-      if (payModalMeta) payModalMeta.innerHTML = `<div class="muted">Failed to load: ${escapeHtml(e.message)}</div>`;
-      return;
-    }
-
-    const pay = details.payment || {};
-    const order = details.order || {};
-    const product = details.product || {};
-    const currency = details.store?.currency || cachedStore?.currency || "";
-
-    if (payModalTitle) {
-      payModalTitle.textContent = `Payment • ${pay.status || ""}`;
-    }
-
-    const buyer = pay.buyer_username ? "@" + escapeHtml(pay.buyer_username) : escapeHtml(String(pay.buyer_id || ""));
-    const amount = escapeHtml(formatMoney(currency, pay.amount));
-    const when = formatDateTime(pay.created_at);
-    const delivery = order.delivery_text ? escapeHtml(order.delivery_text) : '<span class="muted">—</span>';
-
-    if (payModalMeta) {
-      payModalMeta.innerHTML = `
-        <div class="modalGrid">
-          <div><div class="muted small">Payment ID</div><div><code>${escapeHtml(pay.id || "")}</code></div></div>
-          <div><div class="muted small">Order ID</div><div><code>${escapeHtml(pay.order_id || "")}</code></div></div>
-          <div><div class="muted small">Product</div><div><b>${escapeHtml(product.name || "")}</b></div></div>
-          <div><div class="muted small">Buyer</div><div>${buyer}</div></div>
-          <div><div class="muted small">Amount</div><div><b>${amount}</b></div></div>
-          <div><div class="muted small">Submitted</div><div>${escapeHtml(when)}</div></div>
-          <div style="grid-column:1/-1;">
-            <div class="muted small">Delivery details</div>
-            <div class="monoBox">${delivery}</div>
-          </div>
-        </div>
-      `;
-    }
-
-    // Proof preview
-    const isPhoto = String(pay.proof_type || "") === "photo";
-    if (payModalProof) {
-      if (isPhoto) {
-        const imgUrl = `/api/payments/${encodeURIComponent(pay.id)}/proof`;
-        payModalProof.innerHTML = `
-          <div class="proofWrap">
-            <img src="${imgUrl}" alt="Proof" />
-          </div>
-          <div class="muted small">Tip: long-press / open image in new tab if you want to zoom.</div>
-        `;
-      } else {
-        payModalProof.innerHTML = `
-          <div class="muted">Proof is a document (Telegram file_id). Open Telegram to view it.</div>
-          <div class="monoBox"><code>${escapeHtml(pay.proof_file_id || "")}</code></div>
-        `;
-      }
-    }
-
-    // Actions
-    if (payModalActions) {
-      if (pay.status === "awaiting") {
-        payModalActions.innerHTML = `
-          <button class="btn" id="modalApprove">Approve</button>
-          <button class="btn danger" id="modalReject">Reject</button>
-          <button class="btn secondary" id="modalClose2">Close</button>
-          <div class="muted small" style="margin-top:8px;">Approving asks buyer for delivery details automatically.</div>
-        `;
-        const modalApprove = $("modalApprove");
-        const modalReject = $("modalReject");
-        const modalClose2 = $("modalClose2");
-
-        if (modalApprove) {
-          modalApprove.addEventListener("click", async () => {
-            try {
-              await api(`/api/payments/${encodeURIComponent(pay.id)}/approve`, { method: "PUT" });
-              showPayModal(false);
-              await Promise.all([loadPayments(), loadOrders(), loadAnalyticsSafe()]);
-            } catch (e) {
-              alert(renderWriteLockMessage(e) || e.message);
-            }
-          });
-        }
-        if (modalReject) {
-          modalReject.addEventListener("click", async () => {
-            if (!confirm("Reject this payment?")) return;
-            try {
-              await api(`/api/payments/${encodeURIComponent(pay.id)}/reject`, { method: "PUT" });
-              showPayModal(false);
-              await Promise.all([loadPayments(), loadOrders(), loadAnalyticsSafe()]);
-            } catch (e) {
-              alert(renderWriteLockMessage(e) || e.message);
-            }
-          });
-        }
-        if (modalClose2) modalClose2.addEventListener("click", () => showPayModal(false));
-      } else {
-        payModalActions.innerHTML = `<button class="btn secondary" id="modalClose3">Close</button>`;
-        const modalClose3 = $("modalClose3");
-        if (modalClose3) modalClose3.addEventListener("click", () => showPayModal(false));
-      }
-    }
-  }
-
-  function showPayModal(show) {
-    if (!payModal) return;
-    payModal.hidden = !show;
-    if (payModalBackdrop) payModalBackdrop.hidden = !show;
-    document.body.classList.toggle("modalOpen", !!show);
-  }
-
-  // ---------- Settings (Bank) ----------
-  async function saveBankDetails() {
-    if (!bankForm) return;
-    if (bankMsg) bankMsg.textContent = "";
-
-    const fd = new FormData(bankForm);
-    const bank_name = String(fd.get("bank_name") || "").trim();
-    const account_number = String(fd.get("account_number") || "").trim();
-    const account_name = String(fd.get("account_name") || "").trim();
-
-    if (!bank_name || !account_number || !account_name) {
-      if (bankMsg) bankMsg.textContent = "All bank fields are required.";
-      return;
-    }
-
-    try {
-      await api("/api/store/bank", {
-        method: "PUT",
-        body: { bank_name, account_number, account_name },
-      });
-      if (bankMsg) bankMsg.textContent = "Saved ✅";
-      await loadStore(); // refresh store data
-    } catch (e) {
-      const lock = renderWriteLockMessage(e);
-      if (bankMsg) bankMsg.textContent = lock || `Error: ${e.message}`;
-      throw e;
-    }
-  }
-
-  // ---------- Analytics ----------
-  function setKpiValue(el, val) {
-    if (!el) return;
-    el.textContent = String(val ?? "—");
-  }
-
+  // =========================
+  // KPI triangles
+  // =========================
   function setDelta(el, pct) {
     if (!el) return;
+    const n = Number(pct);
 
-    if (pct === null || pct === undefined || !Number.isFinite(Number(pct))) {
-      el.className = "kpiDelta muted deltaFlat";
-      el.innerHTML = "—";
+    if (!Number.isFinite(n)) {
+      el.className = "kpiDelta deltaFlat";
+      el.textContent = "—";
       return;
     }
 
-    const n = Number(pct);
     const abs = Math.abs(n).toFixed(1);
-
     if (n > 0) {
       el.className = "kpiDelta deltaUp";
       el.innerHTML = `<span class="tri up"></span><span>+${abs}%</span>`;
@@ -699,7 +296,7 @@
       el.className = "kpiDelta deltaDown";
       el.innerHTML = `<span class="tri down"></span><span>-${abs}%</span>`;
     } else {
-      el.className = "kpiDelta muted deltaFlat";
+      el.className = "kpiDelta deltaFlat";
       el.innerHTML = `<span>0.0%</span>`;
     }
   }
@@ -721,40 +318,79 @@
     const options = {
       responsive: true,
       maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
-      scales: {
-        x: { ticks: { color: "#a7b0c0" }, grid: { color: "rgba(31,42,64,0.35)" } },
-        y: { ticks: { color: "#a7b0c0", precision: 0 }, grid: { color: "rgba(31,42,64,0.35)" } },
+      plugins: {
+        legend: { display: false },
+        tooltip: { enabled: true },
       },
     };
 
     if (!ordersChart) {
-      ordersChart = new Chart(ordersChartCanvas.getContext("2d"), { type: "line", data, options });
+      ordersChart = new Chart(ordersChartCanvas.getContext("2d"), {
+        type: "line",
+        data,
+        options,
+      });
     } else {
       ordersChart.data = data;
       ordersChart.update();
     }
   }
 
-  async function loadAnalyticsSafe() {
-    if (!cachedStore) return;
-    const period = periodSelect ? periodSelect.value : "30d";
+  // =========================
+  // Load store
+  // =========================
+  async function loadStore() {
+    const out = await api("/api/store");
+    cachedStore = out.store || null;
 
+    setSubUI(cachedStore);
+
+    if (storeInfo && cachedStore) {
+      storeInfo.innerHTML = `
+        <div><b>Name:</b> ${escapeHtml(cachedStore.name || "")}</div>
+        <div><b>Currency:</b> ${escapeHtml(cachedStore.currency || "")}</div>
+        <div><b>Channel:</b> ${
+          cachedStore.channel_username ? "@"+escapeHtml(cachedStore.channel_username) :
+          (cachedStore.channel_id ? escapeHtml(cachedStore.channel_id) : '<span class="muted">Not linked</span>')
+        }</div>
+        <div><b>Delivery note:</b> ${escapeHtml(cachedStore.delivery_note || "")}</div>
+      `;
+    }
+
+    // Settings small summary
+    if (settingsStoreInfo && cachedStore) {
+      settingsStoreInfo.innerHTML = `
+        <div><b>Store:</b> ${escapeHtml(cachedStore.name || "")}</div>
+        <div><b>Currency:</b> ${escapeHtml(cachedStore.currency || "")}</div>
+      `;
+    }
+
+    // Token section in settings
+    if (tokenMasked) tokenMasked.textContent = maskToken(getToken());
+    return cachedStore;
+  }
+
+  // =========================
+  // Analytics
+  // =========================
+  async function loadAnalytics() {
+    if (!cachedStore) return;
+
+    const period = periodSelect ? periodSelect.value : "30d";
     try {
       const out = await api(`/api/analytics?period=${encodeURIComponent(period)}`);
       const a = out.analytics || {};
 
-      setKpiValue(kpiOrders, a.orders_total ?? cachedOrders.length);
+      if (kpiOrders) kpiOrders.textContent = String(a.orders_total ?? "—");
       setDelta(kpiOrdersDelta, a.orders_change_pct);
 
-      setKpiValue(kpiRevenue, a.revenue_total ?? 0);
+      if (kpiRevenue) kpiRevenue.textContent = String(a.revenue_total ?? "—");
       setDelta(kpiRevenueDelta, a.revenue_change_pct);
 
-      const pendingFallback = cachedOrders.filter((o) => o.status === "pending").length;
-      setKpiValue(kpiPending, a.pending_total ?? pendingFallback);
+      if (kpiPending) kpiPending.textContent = String(a.pending_total ?? "—");
       setDelta(kpiPendingDelta, a.pending_change_pct);
 
-      setKpiValue(kpiProducts, a.products_total ?? cachedProducts.length);
+      if (kpiProducts) kpiProducts.textContent = String(a.products_total ?? "—");
       setDelta(kpiProductsDelta, a.products_change_pct);
 
       const labels = a.series?.labels || [];
@@ -763,61 +399,398 @@
 
       if (analyticsMsg) analyticsMsg.textContent = "";
     } catch (e) {
-      // basic fallback
-      const pending = cachedOrders.filter((o) => o.status === "pending").length;
-      setKpiValue(kpiOrders, cachedOrders.length);
-      setDelta(kpiOrdersDelta, null);
-      setKpiValue(kpiRevenue, 0);
-      setDelta(kpiRevenueDelta, null);
-      setKpiValue(kpiPending, pending);
-      setDelta(kpiPendingDelta, null);
-      setKpiValue(kpiProducts, cachedProducts.length);
-      setDelta(kpiProductsDelta, null);
-
-      if (analyticsMsg) analyticsMsg.textContent = `Analytics unavailable (${e.message})`;
+      if (analyticsMsg) analyticsMsg.textContent = e.message || "Analytics unavailable.";
+      // fallback (still show something)
+      if (kpiOrders) kpiOrders.textContent = String(cachedOrders.length || 0);
+      setDelta(kpiOrdersDelta, NaN);
+      if (kpiProducts) kpiProducts.textContent = String(cachedProducts.length || 0);
+      setDelta(kpiProductsDelta, NaN);
+      if (kpiPending) kpiPending.textContent = String(cachedOrders.filter(o => o.status === "pending").length || 0);
+      setDelta(kpiPendingDelta, NaN);
+      if (kpiRevenue) kpiRevenue.textContent = "—";
+      setDelta(kpiRevenueDelta, NaN);
     }
   }
 
-  // ---------- Load all ----------
-  async function loadAll() {
-    await loadStore();
-    await Promise.all([loadProducts(), loadOrders()]);
-    // payments is separate so the dashboard loads fast
-    await loadAnalyticsSafe();
+  // =========================
+  // Products
+  // =========================
+  async function loadProducts() {
+    const out = await api("/api/products");
+    cachedProducts = out.products || [];
+    renderProducts();
+    return cachedProducts;
   }
 
-  // ---------- Login ----------
+  function renderProducts() {
+    if (!productsTbody || !cachedStore) return;
+    productsTbody.innerHTML = "";
+
+    for (const p of cachedProducts) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${escapeHtml(p.name || "")}</td>
+        <td>${escapeHtml(formatMoney(cachedStore.currency, p.price))}</td>
+        <td>${p.in_stock ? '<span class="badge ok">In stock</span>' : '<span class="badge bad">Out</span>'}</td>
+        <td class="muted">${p.photo_file_id ? `<code>${escapeHtml(p.photo_file_id)}</code>` : ""}</td>
+        <td>
+          <button class="btn tiny secondary" data-act="toggle" data-id="${escapeHtml(p.id)}">Toggle</button>
+          <button class="btn tiny secondary" data-act="edit" data-id="${escapeHtml(p.id)}">Edit</button>
+        </td>
+      `;
+      productsTbody.appendChild(tr);
+    }
+  }
+
+  async function toggleStock(productId) {
+    const product = cachedProducts.find(p => p.id === productId);
+    if (!product) throw new Error("Product not found");
+
+    await api(`/api/products/${encodeURIComponent(productId)}`, {
+      method: "PUT",
+      body: {
+        name: product.name,
+        price: product.price,
+        description: product.description || "",
+        in_stock: product.in_stock ? 0 : 1,
+        photo_file_id: product.photo_file_id || null,
+      },
+    });
+  }
+
+  async function editProduct(productId) {
+    const product = cachedProducts.find(p => p.id === productId);
+    if (!product) throw new Error("Product not found");
+
+    const name = prompt("Product name", product.name || "");
+    if (name === null) return;
+
+    const priceStr = prompt("Price (number)", String(product.price ?? 0));
+    if (priceStr === null) return;
+
+    const price = Number(priceStr);
+    if (!Number.isFinite(price) || price < 0) throw new Error("Invalid price");
+
+    const description = prompt("Description", product.description || "") ?? "";
+    const inStock = confirm("In stock? (OK=yes, Cancel=no)") ? 1 : 0;
+    const photo_file_id = prompt("Photo file_id (optional)", product.photo_file_id || "") ?? "";
+
+    await api(`/api/products/${encodeURIComponent(productId)}`, {
+      method: "PUT",
+      body: {
+        name: name.trim(),
+        price,
+        description: description.trim(),
+        in_stock: inStock,
+        photo_file_id: photo_file_id.trim() || null,
+      },
+    });
+  }
+
+  async function addProductFromForm() {
+    if (!productForm || !productFormMsg) return;
+
+    productFormMsg.textContent = "";
+
+    const fd = new FormData(productForm);
+    const name = String(fd.get("name") || "").trim();
+    const price = Number(fd.get("price") || 0);
+    const description = String(fd.get("description") || "").trim();
+    const in_stock = String(fd.get("in_stock") || "1") === "1" ? 1 : 0;
+    const photo_file_id = String(fd.get("photo_file_id") || "").trim() || null;
+
+    if (!name || !Number.isFinite(price)) {
+      productFormMsg.textContent = "Name and numeric price are required.";
+      return;
+    }
+
+    await api("/api/products", {
+      method: "POST",
+      body: { name, price, description, in_stock, photo_file_id },
+    });
+
+    productForm.reset();
+    const stockSel = productForm.querySelector('select[name="in_stock"]');
+    if (stockSel) stockSel.value = "1";
+
+    productFormMsg.textContent = "Product added ✅";
+    await loadProducts();
+    await loadOrders();
+    await loadAnalytics();
+  }
+
+  // =========================
+  // Orders
+  // =========================
+  async function loadOrders() {
+    const out = await api("/api/orders");
+    cachedOrders = out.orders || [];
+    renderOrders();
+    return cachedOrders;
+  }
+
+  function renderOrders() {
+    if (!ordersTbody) return;
+    ordersTbody.innerHTML = "";
+
+    for (const o of cachedOrders) {
+      const buyer = o.buyer_username ? "@"+escapeHtml(o.buyer_username) : '<span class="muted">(unknown)</span>';
+      const delivery = o.delivery_text ? `<div class="small muted" style="margin-top:6px; white-space:pre-wrap">${escapeHtml(o.delivery_text)}</div>` : "";
+
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td><code>${escapeHtml(o.id)}</code></td>
+        <td>${escapeHtml(o.product_name || "")}${delivery}</td>
+        <td>${buyer}</td>
+        <td>${escapeHtml(String(o.qty || ""))}</td>
+        <td><span class="badge">${escapeHtml(o.status || "")}</span></td>
+        <td>
+          <button class="btn tiny secondary" data-act="done" data-id="${escapeHtml(o.id)}">Done</button>
+          <button class="btn tiny secondary" data-act="pending" data-id="${escapeHtml(o.id)}">Pending</button>
+        </td>
+      `;
+      ordersTbody.appendChild(tr);
+    }
+  }
+
+  async function setOrderStatus(orderId, status) {
+    await api(`/api/orders/${encodeURIComponent(orderId)}/status`, {
+      method: "PUT",
+      body: { status },
+    });
+  }
+
+  // =========================
+  // Payments
+  // =========================
+  function showPaymentsMsg(e) {
+    if (!paymentsMsg) return;
+    paymentsMsg.textContent = e ? writeBlockedMsg(e) : "";
+  }
+
+  async function loadPayments() {
+    if (!paymentsTbody) return;
+
+    showPaymentsMsg(null);
+
+    const status = paymentStatusFilter ? paymentStatusFilter.value : "";
+    const qs = status ? `?status=${encodeURIComponent(status)}` : "";
+
+    const out = await api(`/api/payments${qs}`);
+    cachedPayments = out.payments || [];
+    renderPayments();
+  }
+
+  function renderPayments() {
+    if (!paymentsTbody || !cachedStore) return;
+    paymentsTbody.innerHTML = "";
+
+    for (const p of cachedPayments) {
+      const status = String(p.status || "");
+      const statusBadge =
+        status === "awaiting" ? `<span class="badge warn">Awaiting</span>` :
+        status === "confirmed" ? `<span class="badge ok">Confirmed</span>` :
+        status === "rejected" ? `<span class="badge bad">Rejected</span>` :
+        `<span class="badge">${escapeHtml(status)}</span>`;
+
+      const proofBtn = p.proof_file_id
+        ? `<button class="btn tiny secondary" data-act="proof" data-id="${escapeHtml(p.id)}">View proof</button>`
+        : `<span class="muted small">No proof</span>`;
+
+      const actions =
+        status === "awaiting"
+          ? `
+            <button class="btn tiny okBtn" data-act="approve" data-id="${escapeHtml(p.id)}">Approve</button>
+            <button class="btn tiny danger" data-act="reject" data-id="${escapeHtml(p.id)}">Reject</button>
+          `
+          : `<span class="muted small">—</span>`;
+
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td><code>${escapeHtml(p.order_id || "")}</code></td>
+        <td>${escapeHtml(p.product_name || "")}</td>
+        <td>${escapeHtml(p.buyer_username ? "@"+p.buyer_username : (p.buyer_id || ""))}</td>
+        <td>${escapeHtml(formatMoney(p.currency || cachedStore.currency, p.amount || 0))}</td>
+        <td>${statusBadge}</td>
+        <td class="flexCell">
+          ${proofBtn}
+          ${actions}
+        </td>
+      `;
+      paymentsTbody.appendChild(tr);
+    }
+  }
+
+  function openProofModal(paymentId) {
+    if (!proofModal || !proofImg) return;
+
+    proofImg.src = "";
+    proofModal.hidden = false;
+
+    const url = `/api/payments/${encodeURIComponent(paymentId)}/proof`;
+    proofImg.src = url;
+
+    const p = cachedPayments.find(x => x.id === paymentId);
+    if (proofMeta) {
+      proofMeta.innerHTML = p
+        ? `Order: <code>${escapeHtml(p.order_id || "")}</code> · Buyer: <b>${escapeHtml(p.buyer_username ? "@"+p.buyer_username : (p.buyer_id || ""))}</b>`
+        : "";
+    }
+  }
+
+  function closeProofModal() {
+    if (!proofModal || !proofImg) return;
+    proofModal.hidden = true;
+    proofImg.src = "";
+  }
+
+  async function approvePayment(paymentId) {
+    await api(`/api/payments/${encodeURIComponent(paymentId)}/approve`, { method: "PUT" });
+  }
+
+  async function rejectPayment(paymentId) {
+    await api(`/api/payments/${encodeURIComponent(paymentId)}/reject`, { method: "PUT" });
+  }
+
+  // =========================
+  // Settings
+  // =========================
+  function renderSettings() {
+    if (!cachedStore) return;
+
+    if (planBox) {
+      const active = !!cachedStore.subscription_active;
+      const status = String(cachedStore.subscription_status || "unknown").toLowerCase();
+      const exp = cachedStore.subscription_expires_at || "—";
+      const supUser = cachedStore.support_username || "orderlyysupport";
+      const supLink = cachedStore.support_link || `https://t.me/${supUser}`;
+
+      planBox.innerHTML = `
+        <div class="planRow">
+          <div>
+            <div class="muted small">Plan</div>
+            <div class="big">${escapeHtml(status.toUpperCase())}</div>
+          </div>
+          <div>
+            <div class="muted small">Status</div>
+            <div class="big">${active ? "✅ ACTIVE" : "🔒 INACTIVE"}</div>
+          </div>
+          <div>
+            <div class="muted small">Expiry</div>
+            <div class="big">${escapeHtml(exp)}</div>
+          </div>
+        </div>
+        <div class="muted small" style="margin-top:10px;">
+          Need activation? Contact support: <a href="${escapeHtml(supLink)}" target="_blank" rel="noreferrer">@${escapeHtml(supUser)}</a>
+        </div>
+      `;
+    }
+
+    // bank form prefill (if fields exist)
+    if (bankForm) {
+      const bank = bankForm.querySelector('input[name="bank_name"]');
+      const acct = bankForm.querySelector('input[name="account_number"]');
+      const name = bankForm.querySelector('input[name="account_name"]');
+
+      if (bank) bank.value = cachedStore.bank_name || "";
+      if (acct) acct.value = cachedStore.account_number || "";
+      if (name) name.value = cachedStore.account_name || "";
+    }
+
+    if (tokenMasked) tokenMasked.textContent = maskToken(getToken());
+    setSubUI(cachedStore);
+  }
+
+  async function saveBankDetails() {
+    if (!bankForm || !bankMsg) return;
+
+    bankMsg.textContent = "";
+
+    const bank_name = String(bankForm.querySelector('input[name="bank_name"]')?.value || "").trim();
+    const account_number = String(bankForm.querySelector('input[name="account_number"]')?.value || "").trim();
+    const account_name = String(bankForm.querySelector('input[name="account_name"]')?.value || "").trim();
+
+    if (!bank_name || !account_number || !account_name) {
+      bankMsg.textContent = "All fields are required.";
+      return;
+    }
+
+    try {
+      await api("/api/store/bank", {
+        method: "PUT",
+        body: { bank_name, account_number, account_name },
+      });
+      bankMsg.textContent = "Saved ✅";
+      await loadStore(); // refresh store
+      renderSettings();
+    } catch (e) {
+      bankMsg.textContent = writeBlockedMsg(e);
+    }
+  }
+
+  async function copyDashboardLink() {
+    if (!copyMsg) return;
+
+    const token = getToken();
+    if (!token) {
+      copyMsg.textContent = "No token.";
+      return;
+    }
+
+    const base = location.origin + location.pathname;
+    const link = `${base}?token=${encodeURIComponent(token)}`;
+
+    try {
+      await navigator.clipboard.writeText(link);
+      copyMsg.textContent = "Copied ✅";
+    } catch {
+      copyMsg.textContent = "Copy failed. (Your browser blocked clipboard)";
+    }
+  }
+
+  // =========================
+  // Load all core data
+  // =========================
+  async function loadAllCore() {
+    await loadStore();
+    await Promise.all([
+      loadProducts().catch(() => {}),
+      loadOrders().catch(() => {}),
+    ]);
+    await loadAnalytics().catch(() => {});
+  }
+
+  // =========================
+  // Login
+  // =========================
   async function doLogin(token) {
     if (!token) throw new Error("Missing token");
     setToken(token);
     showApp();
-    setActivePanel(getInitialPanel());
-    await loadAll();
+    await loadAllCore();
+    setActivePage("overview");
   }
 
-  // ---------- Wiring ----------
+  // =========================
+  // Wiring
+  // =========================
   function wireEvents() {
-    // Sidebar navigation
-    navButtons.forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const name = btn.dataset.nav;
-        setActivePanel(name);
+    // Hamburger
+    if (hamburger) hamburger.addEventListener("click", openSidebar);
+    if (backdrop) backdrop.addEventListener("click", closeSidebar);
 
-        // Lazy load
-        if (name === "payments") loadPayments().catch((e) => (paymentsMsg ? (paymentsMsg.textContent = e.message) : alert(e.message)));
-        if (name === "orders") loadOrders().catch((e) => alert(e.message));
-        if (name === "products") loadProducts().catch((e) => alert(e.message));
-        if (name === "settings") loadStore().catch((e) => alert(e.message));
-      });
+    // Nav
+    navBtns.forEach((btn) => {
+      btn.addEventListener("click", () => setActivePage(btn.dataset.page));
     });
 
     // Login
     if (loginBtn) {
       loginBtn.addEventListener("click", async () => {
-        const token = tokenInput ? tokenInput.value.trim() : "";
-        if (!token) return;
+        const t = tokenInput ? tokenInput.value.trim() : "";
+        if (!t) return;
         try {
-          await doLogin(token);
+          await doLogin(t);
         } catch (e) {
           clearToken();
           alert("Login failed: " + (e.message || e));
@@ -834,16 +807,58 @@
       });
     }
 
-    // Products
-    if (refreshProductsBtn) refreshProductsBtn.addEventListener("click", () => loadProducts().catch((e) => alert(e.message)));
-    if (productForm) {
-      productForm.addEventListener("submit", (ev) => {
-        ev.preventDefault();
-        addProductFromForm().catch(() => {});
+    // Overview period
+    if (periodSelect) {
+      periodSelect.addEventListener("change", () => loadAnalytics().catch(() => {}));
+    }
+
+    // Products refresh
+    if (refreshProductsBtn) {
+      refreshProductsBtn.addEventListener("click", () => loadProducts().catch((e) => alert(e.message)));
+    }
+
+    // Products table actions (delegation)
+    if (productsTbody) {
+      productsTbody.addEventListener("click", async (ev) => {
+        const btn = ev.target.closest("button");
+        if (!btn) return;
+
+        const act = btn.getAttribute("data-act");
+        const id = btn.getAttribute("data-id");
+        if (!act || !id) return;
+
+        try {
+          if (act === "toggle") {
+            await toggleStock(id);
+            await loadProducts();
+            await loadAnalytics();
+          } else if (act === "edit") {
+            await editProduct(id);
+            await loadProducts();
+            await loadAnalytics();
+          }
+        } catch (e) {
+          alert(writeBlockedMsg(e));
+        }
       });
     }
-    if (clearFormBtn && productForm) {
-      clearFormBtn.addEventListener("click", () => {
+
+    // Product form submit
+    if (productForm) {
+      productForm.addEventListener("submit", async (ev) => {
+        ev.preventDefault();
+        try {
+          await addProductFromForm();
+        } catch (e) {
+          if (productFormMsg) productFormMsg.textContent = writeBlockedMsg(e);
+          alert(writeBlockedMsg(e));
+        }
+      });
+    }
+
+    // Product form clear
+    if (clearProductFormBtn && productForm) {
+      clearProductFormBtn.addEventListener("click", () => {
         productForm.reset();
         const stockSel = productForm.querySelector('select[name="in_stock"]');
         if (stockSel) stockSel.value = "1";
@@ -851,41 +866,114 @@
       });
     }
 
-    // Orders
-    if (refreshOrdersBtn) refreshOrdersBtn.addEventListener("click", () => loadOrders().catch((e) => alert(e.message)));
+    // Orders refresh
+    if (refreshOrdersBtn) {
+      refreshOrdersBtn.addEventListener("click", () => loadOrders().catch((e) => alert(e.message)));
+    }
 
-    // Payments
-    if (refreshPaymentsBtn) refreshPaymentsBtn.addEventListener("click", () => loadPayments().catch((e) => alert(e.message)));
-    if (paymentsStatus) paymentsStatus.addEventListener("change", () => loadPayments().catch((e) => alert(e.message)));
+    // Orders actions (delegation)
+    if (ordersTbody) {
+      ordersTbody.addEventListener("click", async (ev) => {
+        const btn = ev.target.closest("button");
+        if (!btn) return;
+        const act = btn.getAttribute("data-act");
+        const id = btn.getAttribute("data-id");
+        if (!act || !id) return;
 
-    // Settings bank form
-    if (bankForm) {
-      bankForm.addEventListener("submit", (ev) => {
-        ev.preventDefault();
-        saveBankDetails().catch(() => {});
+        try {
+          if (act === "done") await setOrderStatus(id, "done");
+          if (act === "pending") await setOrderStatus(id, "pending");
+          await loadOrders();
+          await loadAnalytics();
+        } catch (e) {
+          alert(writeBlockedMsg(e));
+        }
       });
     }
 
-    // Analytics period
-    if (periodSelect) {
-      periodSelect.addEventListener("change", () => loadAnalyticsSafe().catch(() => {}));
+    // Payments refresh
+    if (refreshPaymentsBtn) {
+      refreshPaymentsBtn.addEventListener("click", () => loadPayments().catch((e) => showPaymentsMsg(e)));
+    }
+    if (paymentStatusFilter) {
+      paymentStatusFilter.addEventListener("change", () => loadPayments().catch((e) => showPaymentsMsg(e)));
     }
 
-    // Modal close
-    if (payModalClose) payModalClose.addEventListener("click", () => showPayModal(false));
-    if (payModalBackdrop) payModalBackdrop.addEventListener("click", () => showPayModal(false));
-    window.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") showPayModal(false);
-    });
+    // Payments actions (delegation)
+    if (paymentsTbody) {
+      paymentsTbody.addEventListener("click", async (ev) => {
+        const btn = ev.target.closest("button");
+        if (!btn) return;
+        const act = btn.getAttribute("data-act");
+        const id = btn.getAttribute("data-id");
+        if (!act || !id) return;
+
+        try {
+          if (act === "proof") {
+            openProofModal(id);
+            return;
+          }
+          if (act === "approve") {
+            if (!confirm("Approve this payment?")) return;
+            await approvePayment(id);
+            await loadPayments();
+            await loadOrders();
+            await loadAnalytics();
+          }
+          if (act === "reject") {
+            if (!confirm("Reject this payment?")) return;
+            await rejectPayment(id);
+            await loadPayments();
+            await loadOrders();
+            await loadAnalytics();
+          }
+        } catch (e) {
+          showPaymentsMsg(e);
+        }
+      });
+    }
+
+    // Proof modal close
+    if (proofClose) proofClose.addEventListener("click", closeProofModal);
+    if (proofModal) {
+      proofModal.addEventListener("click", (e) => {
+        if (e.target === proofModal) closeProofModal();
+      });
+    }
+
+    // Settings: bank save
+    if (bankForm) {
+      bankForm.addEventListener("submit", (ev) => {
+        ev.preventDefault();
+        saveBankDetails().catch((e) => {
+          if (bankMsg) bankMsg.textContent = writeBlockedMsg(e);
+        });
+      });
+    }
+
+    // Settings: bank clear
+    if (bankClear && bankForm) {
+      bankClear.addEventListener("click", () => {
+        bankForm.reset();
+        if (bankMsg) bankMsg.textContent = "";
+      });
+    }
+
+    // Settings: copy dashboard link
+    if (copyDashLink) {
+      copyDashLink.addEventListener("click", () => copyDashboardLink());
+    }
   }
 
-  // ---------- Boot ----------
+  // =========================
+  // Boot
+  // =========================
   async function boot() {
     const urlToken = getTokenFromUrl();
     const existing = getToken();
     const chosen = urlToken || existing;
 
-    setInputValueSafe(tokenInput, chosen);
+    if (tokenInput) tokenInput.value = chosen;
 
     if (chosen) {
       try {
@@ -899,36 +987,10 @@
     showLogin();
   }
 
-  // ---------- Minimal UI helpers injected ----------
-  function injectUiStyles() {
-    const style = document.createElement("style");
-    style.textContent = `
-      /* left nav polish (works with your CSS, even if you forget to add new styles) */
-      .rowActions{display:flex;gap:8px;flex-wrap:wrap}
-      .btn.tiny{padding:8px 10px;font-size:12px;border-radius:10px}
-      .pill{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);border-radius:999px;padding:4px 10px;font-size:12px}
-      .pill.ok{color:var(--good);border-color:rgba(46,229,157,.35);background:rgba(46,229,157,.08)}
-      .pill.bad{color:var(--danger);border-color:rgba(255,77,77,.35);background:rgba(255,77,77,.08)}
-      .pill.warn{color:var(--warn);border-color:rgba(255,176,32,.35);background:rgba(255,176,32,.08)}
-      .pill.soft{color:var(--muted);background:rgba(255,255,255,.03)}
-      .infoGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
-      @media(max-width:900px){.infoGrid{grid-template-columns:1fr}}
-      .cellMain{font-weight:800}
-      .modalOpen{overflow:hidden}
-      /* modal (needs HTML IDs, but safe even if missing) */
-      #payModalBackdrop{position:fixed;inset:0;background:rgba(0,0,0,.55);backdrop-filter:blur(6px);z-index:1000}
-      #payModal{position:fixed;inset:auto;left:50%;top:50%;transform:translate(-50%,-50%);width:min(880px,92vw);max-height:86vh;overflow:auto;z-index:1001}
-      .modalGrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
-      @media(max-width:900px){.modalGrid{grid-template-columns:1fr}}
-      .monoBox{border:1px solid var(--border);border-radius:12px;padding:10px;background:rgba(255,255,255,.03);white-space:pre-wrap}
-      .proofWrap{border:1px solid var(--border);border-radius:14px;overflow:hidden;background:rgba(255,255,255,.02)}
-      .proofWrap img{display:block;width:100%;height:auto}
-    `;
-    document.head.appendChild(style);
-  }
-
   window.addEventListener("DOMContentLoaded", () => {
-    injectUiStyles();
+    // Safety: if backdrop exists but no sidebar, keep it hidden
+    if (backdrop) backdrop.hidden = true;
+
     wireEvents();
     boot().catch((e) => {
       clearToken();

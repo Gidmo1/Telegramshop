@@ -67,7 +67,7 @@ function bearerToken(request) {
   return m ? m[1].trim() : null;
 }
 
-/* ---------------- Telegram ---------------- */
+/* Telegram */
 
 async function tgCall(env, method, payload) {
   const url = `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`;
@@ -105,7 +105,7 @@ function kb(rows) {
   return { reply_markup: { inline_keyboard: rows } };
 }
 
-/* ---------------- KV State ---------------- */
+/* KV State */
 
 async function getState(env, userId) {
   const raw = await env.STATE.get(`state:${userId}`);
@@ -120,7 +120,7 @@ async function clearState(env, userId) {
   await env.STATE.delete(`state:${userId}`);
 }
 
-/* ---------------- D1 Helpers ---------------- */
+/* D1 */
 
 async function dbOne(stmt) {
   if (typeof stmt.first === "function") {
@@ -138,7 +138,7 @@ async function authStore(env, request) {
   return dbOne(env.DB.prepare("SELECT * FROM stores WHERE owner_token = ?").bind(token));
 }
 
-/* ---------------- Subscription ---------------- */
+/* Subscription */
 
 const FREE_TRIAL_DAYS = 14;
 
@@ -158,10 +158,13 @@ function parseDateMs(s) {
 
 function isStoreActive(store) {
   if (!store) return true;
+
+  // fail-open if columns don't exist (old DB)
   if (!("subscription_status" in store) || !("subscription_expires_at" in store)) return true;
 
   const status = String(store.subscription_status || "").toLowerCase();
   const expMs = parseDateMs(store.subscription_expires_at);
+
   if (!Number.isFinite(expMs)) {
     if (status === "expired" || status === "inactive") return false;
     return true;
@@ -197,8 +200,10 @@ function subscriptionInfo(store) {
 
 async function requireActiveStoreOrExplain(env, chatId, store) {
   if (isStoreActive(store)) return true;
+
   const info = subscriptionInfo(store);
   const exp = info.expires_at ? `\nExpiry: <code>${escapeHtml(info.expires_at)}</code>` : "";
+
   await tgSendMessage(
     env,
     chatId,
@@ -208,7 +213,7 @@ async function requireActiveStoreOrExplain(env, chatId, store) {
   return false;
 }
 
-/* ---------------- Bot Menus ---------------- */
+/* Menus */
 
 function mainMenu() {
   return kb([
@@ -244,7 +249,7 @@ function sellerDeliveryStatusMenu(orderId) {
   ]);
 }
 
-/* ---------------- Utility ---------------- */
+/* Utility */
 
 function moneyAmount(currency, amount) {
   const cur = String(currency || "");
@@ -281,7 +286,7 @@ async function tgGetFileUrl(env, file_id) {
   return `https://api.telegram.org/file/bot${env.TELEGRAM_BOT_TOKEN}/${file_path}`;
 }
 
-/* ---------------- Analytics ---------------- */
+/* Analytics */
 
 function clampPeriod(period) {
   const p = String(period || "").toLowerCase();
@@ -406,7 +411,7 @@ async function handleAnalytics(env, store, request) {
   });
 }
 
-/* ---------------- API ---------------- */
+/* API */
 
 async function handleApi(env, request) {
   const url = new URL(request.url);
@@ -416,7 +421,10 @@ async function handleApi(env, request) {
   if (!storeAuth) return json({ ok: false, error: "unauthorized" }, { status: 401 });
 
   await ensureStoreSubscriptionDefaults(env, storeAuth.id);
-  const store = (await dbOne(env.DB.prepare("SELECT * FROM stores WHERE id = ?").bind(storeAuth.id))) || storeAuth;
+
+  const store =
+    (await dbOne(env.DB.prepare("SELECT * FROM stores WHERE id = ?").bind(storeAuth.id))) || storeAuth;
+
   const active = isStoreActive(store);
 
   if (path === "/api/analytics") return handleAnalytics(env, store, request);
@@ -552,6 +560,7 @@ async function handleApi(env, request) {
 
   if (path === "/api/payments") {
     if (request.method !== "GET") return methodNotAllowed();
+
     const q = new URL(request.url).searchParams;
     const status = String(q.get("status") || "").trim();
 
@@ -575,43 +584,25 @@ async function handleApi(env, request) {
       sql += " AND pay.status = ?";
       binds.push(status);
     }
+
     sql += " ORDER BY pay.created_at DESC";
 
     const res = await env.DB.prepare(sql).bind(...binds).all();
     return json({ ok: true, payments: res.results || [] });
   }
 
-  const payGetMatch = path.match(/^\/api\/payments\/([^\/]+)$/);
-  if (payGetMatch) {
-    if (request.method !== "GET") return methodNotAllowed();
-    const paymentId = payGetMatch[1];
-
-    const pay = await dbOne(env.DB.prepare("SELECT * FROM payments WHERE id = ?").bind(paymentId));
-    if (!pay || String(pay.store_id) !== String(store.id)) return json({ ok: false, error: "not_found" }, { status: 404 });
-
-    const order = await dbOne(env.DB.prepare("SELECT * FROM orders WHERE id = ?").bind(pay.order_id));
-    const product = order ? await dbOne(env.DB.prepare("SELECT * FROM products WHERE id = ?").bind(order.product_id)) : null;
-
-    return json({
-      ok: true,
-      payment: pay,
-      order,
-      product: product ? { id: product.id, name: product.name, price: product.price } : null,
-      store: { id: store.id, currency: store.currency },
-    });
-  }
-
   const payProofMatch = path.match(/^\/api\/payments\/([^\/]+)\/proof$/);
   if (payProofMatch) {
     if (request.method !== "GET") return methodNotAllowed();
-    const paymentId = payProofMatch[1];
 
+    const paymentId = payProofMatch[1];
     const pay = await dbOne(env.DB.prepare("SELECT * FROM payments WHERE id = ?").bind(paymentId));
     if (!pay || String(pay.store_id) !== String(store.id)) return new Response("Not found", { status: 404 });
 
     const fileUrl = await tgGetFileUrl(env, pay.proof_file_id);
     const r = await fetch(fileUrl);
     const ct = r.headers.get("content-type") || "application/octet-stream";
+
     return new Response(r.body, {
       status: 200,
       headers: { "content-type": ct, "cache-control": "private, max-age=60" },
@@ -643,17 +634,20 @@ async function handleApi(env, request) {
       .bind("pending", pay.order_id, pay.store_id).run();
 
     try {
-      await tgSendMessage(env, Number(pay.buyer_id),
+      await tgSendMessage(
+        env,
+        Number(pay.buyer_id),
         `Payment rejected ❌\nOrder Ref: <code>${escapeHtml(pay.order_id)}</code>\n\nPlease tap the payment button again and resend proof.`
       );
     } catch {}
+
     return json({ ok: true });
   }
 
   return notFound();
 }
 
-/* ---------------- Telegram Flow Helpers ---------------- */
+/* Telegram flow helpers */
 
 async function sendPaymentInstructions(env, buyerChatId, store, product, qty, orderId) {
   const total = asNumber(product.price) * asNumber(qty);
@@ -699,7 +693,7 @@ async function notifyBuyerStatus(env, buyerId, orderId, statusText) {
   } catch {}
 }
 
-/* ---------------- Telegram Webhook ---------------- */
+/* Telegram webhook */
 
 async function handleTelegramOrderQty(env, message) {
   const chatId = message.chat.id;
@@ -782,6 +776,7 @@ async function handleTelegram(env, request) {
     if (state?.step === "order:address") {
       const orderId = state.data?.order_id;
       const txt = (message.text || "").trim();
+
       if (!orderId) {
         await clearState(env, userId);
         await tgSendMessage(env, chatId, "Session expired. Please contact the seller.");
@@ -898,7 +893,12 @@ async function handleTelegram(env, request) {
         if (proof_type === "photo") {
           await tgSendPhoto(env, ownerChatId, proof_file_id, caption, sellerPayReviewMenu(paymentId));
         } else {
-          await tgSendMessage(env, ownerChatId, `${caption}\n\nProof (document file_id): <code>${escapeHtml(proof_file_id)}</code>`, sellerPayReviewMenu(paymentId));
+          await tgSendMessage(
+            env,
+            ownerChatId,
+            `${caption}\n\nProof (document file_id): <code>${escapeHtml(proof_file_id)}</code>`,
+            sellerPayReviewMenu(paymentId)
+          );
         }
       } catch {}
 
@@ -915,23 +915,44 @@ async function handleTelegram(env, request) {
 
       if (payload.startsWith("order_")) {
         const productId = payload.slice("order_".length);
-        const product = await dbOne(env.DB.prepare("SELECT * FROM products WHERE id = ?").bind(productId));
+        const product = await dbOne(
+          env.DB.prepare("SELECT * FROM products WHERE id = ?").bind(productId)
+        );
 
-        if (!product) { await tgSendMessage(env, chatId, "That product no longer exists."); return json({ ok: true }); }
-        if (!product.in_stock) { await tgSendMessage(env, chatId, "This product is currently out of stock."); return json({ ok: true }); }
+        if (!product) {
+          await tgSendMessage(env, chatId, "That product no longer exists.");
+          return json({ ok: true });
+        }
+        if (!product.in_stock) {
+          await tgSendMessage(env, chatId, "This product is currently out of stock.");
+          return json({ ok: true });
+        }
 
         await setState(env, userId, { step: "order:qty", data: { product_id: productId } });
-        await tgSendMessage(env, chatId, `Ordering: <b>${escapeHtml(product.name)}</b>\n\nQuantity? (e.g. 1)`);
+        await tgSendMessage(
+          env,
+          chatId,
+          `Ordering: <b>${escapeHtml(product.name)}</b>\n\nQuantity? (e.g. 1)`
+        );
         return json({ ok: true });
       }
 
-      await tgSendMessage(env, chatId, "Welcome to <b>Orderlyy</b>\n\nCreate a store, link your channel, and add products — all inside Telegram.", mainMenu());
+      await tgSendMessage(
+        env,
+        chatId,
+        "Welcome to <b>Orderlyy</b>\n\nCreate a store, link your channel, and add products — all inside Telegram.",
+        mainMenu()
+      );
       return json({ ok: true });
     }
 
+    // create store flow
     if (state?.step === "create:name") {
       const name = textMsg;
-      if (!name) { await tgSendMessage(env, chatId, "Send your store name."); return json({ ok: true }); }
+      if (!name) {
+        await tgSendMessage(env, chatId, "Send your store name.");
+        return json({ ok: true });
+      }
       await setState(env, userId, { step: "create:currency", data: { name } });
       await tgSendMessage(env, chatId, "Currency? (e.g. ₦, $, £)");
       return json({ ok: true });
@@ -970,6 +991,7 @@ async function handleTelegram(env, request) {
       return json({ ok: true });
     }
 
+    // link channel flow
     if (state?.step === "link:channel") {
       let channelRef = textMsg;
       if (!channelRef && message.forward_from_chat) channelRef = String(message.forward_from_chat.id);
@@ -987,7 +1009,8 @@ async function handleTelegram(env, request) {
       }
 
       await ensureStoreSubscriptionDefaults(env, store.id);
-      const freshStore = (await dbOne(env.DB.prepare("SELECT * FROM stores WHERE id = ?").bind(store.id))) || store;
+      const freshStore =
+        (await dbOne(env.DB.prepare("SELECT * FROM stores WHERE id = ?").bind(store.id))) || store;
 
       if (!(await requireActiveStoreOrExplain(env, chatId, freshStore))) {
         await clearState(env, userId);
@@ -1023,6 +1046,7 @@ async function handleTelegram(env, request) {
       return json({ ok: true });
     }
 
+    // add product flow
     if (state?.step === "product:photo") {
       const store = await ensureStoreExists(env, userId);
       if (!store) {
@@ -1032,7 +1056,9 @@ async function handleTelegram(env, request) {
       }
 
       await ensureStoreSubscriptionDefaults(env, store.id);
-      const freshStore = (await dbOne(env.DB.prepare("SELECT * FROM stores WHERE id = ?").bind(store.id))) || store;
+      const freshStore =
+        (await dbOne(env.DB.prepare("SELECT * FROM stores WHERE id = ?").bind(store.id))) || store;
+
       if (!(await requireActiveStoreOrExplain(env, chatId, freshStore))) {
         await clearState(env, userId);
         return json({ ok: true });
@@ -1121,6 +1147,7 @@ async function handleTelegram(env, request) {
     return json({ ok: true });
   }
 
+  // CALLBACKS
   if (cb) {
     const userId = cb.from.id;
     const chatId = cb.from.id;
@@ -1140,8 +1167,10 @@ async function handleTelegram(env, request) {
         await tgSendMessage(env, chatId, "Create a store first.", mainMenu());
         return json({ ok: true });
       }
+
       await ensureStoreSubscriptionDefaults(env, store.id);
-      const freshStore = (await dbOne(env.DB.prepare("SELECT * FROM stores WHERE id = ?").bind(store.id))) || store;
+      const freshStore =
+        (await dbOne(env.DB.prepare("SELECT * FROM stores WHERE id = ?").bind(store.id))) || store;
 
       const info = subscriptionInfo(freshStore);
       const statusLabel = info.active ? "✅ Active" : "🔒 Inactive/Expired";
@@ -1162,13 +1191,15 @@ async function handleTelegram(env, request) {
         await tgSendMessage(env, chatId, "Create a store first.", mainMenu());
         return json({ ok: true });
       }
+
       await ensureStoreSubscriptionDefaults(env, store.id);
-      const freshStore = (await dbOne(env.DB.prepare("SELECT * FROM stores WHERE id = ?").bind(store.id))) || store;
+      const freshStore =
+        (await dbOne(env.DB.prepare("SELECT * FROM stores WHERE id = ?").bind(store.id))) || store;
 
       if (!(await requireActiveStoreOrExplain(env, chatId, freshStore))) return json({ ok: true });
 
       await setState(env, userId, { step: "link:channel", data: {} });
-      await tgSendMessage(env, chatId, "Send your channel @username OR forward a message.\n\nAlso: add me as <b>Admin</b> in the channel first.");
+      await tgSendMessage(env, chatId, "Send your channel @username OR forward a message from your channel.\n\nAlso: add me as <b>Admin</b> in the channel first.");
       return json({ ok: true });
     }
 
@@ -1178,8 +1209,10 @@ async function handleTelegram(env, request) {
         await tgSendMessage(env, chatId, "Create a store first.", mainMenu());
         return json({ ok: true });
       }
+
       await ensureStoreSubscriptionDefaults(env, store.id);
-      const freshStore = (await dbOne(env.DB.prepare("SELECT * FROM stores WHERE id = ?").bind(store.id))) || store;
+      const freshStore =
+        (await dbOne(env.DB.prepare("SELECT * FROM stores WHERE id = ?").bind(store.id))) || store;
 
       if (!(await requireActiveStoreOrExplain(env, chatId, freshStore))) return json({ ok: true });
 
@@ -1199,8 +1232,10 @@ async function handleTelegram(env, request) {
         await tgSendMessage(env, chatId, "Create a store first.", mainMenu());
         return json({ ok: true });
       }
+
       await ensureStoreSubscriptionDefaults(env, store.id);
-      const freshStore = (await dbOne(env.DB.prepare("SELECT * FROM stores WHERE id = ?").bind(store.id))) || store;
+      const freshStore =
+        (await dbOne(env.DB.prepare("SELECT * FROM stores WHERE id = ?").bind(store.id))) || store;
 
       if (!(await requireActiveStoreOrExplain(env, chatId, freshStore))) return json({ ok: true });
 
@@ -1275,10 +1310,13 @@ async function handleTelegram(env, request) {
         .bind("pending", payment.order_id, payment.store_id).run();
 
       try {
-        await tgSendMessage(env, Number(payment.buyer_id),
+        await tgSendMessage(
+          env,
+          Number(payment.buyer_id),
           `Payment rejected ❌\nOrder Ref: <code>${escapeHtml(payment.order_id)}</code>\n\nPlease tap the payment button again and resend proof.`
         );
       } catch {}
+
       await tgSendMessage(env, chatId, `Rejected ❌\nOrder Ref: <code>${escapeHtml(payment.order_id)}</code>`);
       return json({ ok: true });
     }
@@ -1313,7 +1351,7 @@ async function handleTelegram(env, request) {
   return json({ ok: true });
 }
 
-/* ---------------- Worker fetch ---------------- */
+/* Worker fetch */
 
 export default {
   async fetch(request, env) {
